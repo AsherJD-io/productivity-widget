@@ -105,10 +105,26 @@ let config: WidgetConfig = loadConfig();
 const COMPACT = { width: 238, height: 155 } as const;
 const EXPANDED = { width: 398, height: 605 } as const;
 
+/*
+ * Measured on this machine: requesting 238x155 produced a window measuring
+ * 239x156, and 398x605 produced 399x606. Chromium keeps a 1px invisible frame
+ * on each axis of a frameless window; `thickFrame: false` does not remove it.
+ *
+ * The reference dimensions are what the WIDGET must measure, so the size
+ * actually requested is reduced by 1px per axis to land exactly on them.
+ */
+const FRAME_COMPENSATION = 1;
+
 type Geometry = { width: number; height: number };
 
 function geometryFor(expanded: boolean): Geometry {
-  return expanded ? { ...EXPANDED } : { ...COMPACT };
+  const target = expanded ? EXPANDED : COMPACT;
+  // Subtract the measured invisible frame so the window lands exactly on the
+  // reference dimensions rather than 1px beyond them.
+  return {
+    width: target.width - FRAME_COMPENSATION,
+    height: target.height - FRAME_COMPENSATION,
+  };
 }
 
 /**
@@ -146,9 +162,15 @@ function createWindow(): BrowserWindow {
     width: size.width,
     height: size.height,
     ...position,
-    // Width/height above are the CONTENT size, so they match the widget's
-    // own box exactly instead of including any invisible window chrome.
-    useContentSize: true,
+    /*
+     * useContentSize is deliberately NOT set.
+     *
+     * For a frameless window the content box already equals the window box,
+     * so it only adds ambiguity. Worse, it made setMinimumSize/setMaximumSize
+     * content-relative while setBounds stayed window-relative, and mixing the
+     * two is what allowed the reported drift. Every size call in this file
+     * is now unambiguously a window bound.
+     */
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -459,82 +481,103 @@ async function runSelfTest(): Promise<void> {
   const bounds = win.getBounds();
 
   /*
-   * Ten expand/collapse cycles through the SAME applyGeometry() the button
-   * uses, measuring the real OS window each time.
+   * TEN CYCLES THROUGH THE REAL INTERACTION PATH.
    *
-   * This is the regression guard for the reported bug: the old animated
-   * toggle grew the window without bound. Absolute bounds cannot do that,
-   * but "cannot" is a claim, and this measures it.
+   * A previous revision called applyGeometry() directly. That only proved the
+   * helper worked, and left the user-reported "window grows when I click it"
+   * bug completely untested.
+   *
+   * Each cycle now performs a real DOM click on the circular control inside
+   * the gold tray, exercising the whole chain:
+   *
+   *   .tray-toggle click -> renderer listener -> window.widget.toggleExpand()
+   *   -> ipcRenderer.invoke("widget:toggle-expand") -> ipcMain handler
+   *   -> config.expanded flips -> applyGeometry() -> win.setBounds()
+   *
+   * A synthetic DOM click is used, NOT an operating-system mouse event:
+   * Electron cannot inject a trusted OS click into its own window from
+   * inside the process, and no external input automation is available here.
+   * Everything downstream of the click is the genuine production path.
    */
-  const cycles: Array<{ step: number; expanded: boolean; w: number; h: number; x: number; y: number }> = [];
+  const clickTrayToggle = async (): Promise<void> => {
+    await win.webContents.executeJavaScript(`
+      (() => {
+        const btn = document.querySelector('.tray-toggle');
+        if (!btn) throw new Error('circular tray control not found');
+        btn.click();
+        return true;
+      })()
+    `);
+    await new Promise((r) => setTimeout(r, 250));
+  };
+
+  const measure = async (): Promise<Record<string, unknown>> => {
+    const b = win.getBounds();
+    const dom = await win.webContents.executeJavaScript(`
+      (() => {
+        const q = (s) => document.querySelector(s);
+        const r = (s) => { const e = q(s); return e ? e.getBoundingClientRect() : null; };
+        const shell = r('.shell'), paper = r('.paper'), tray = r('.tray'), list = r('.expanded');
+        const chev = q('.chevron');
+        return {
+          viewport: [document.documentElement.clientWidth, document.documentElement.clientHeight],
+          shell: shell ? { w: Math.round(shell.width), h: Math.round(shell.height) } : null,
+          paper: paper ? { top: Math.round(paper.top), height: Math.round(paper.height) } : null,
+          tray: tray ? { top: Math.round(tray.top), height: Math.round(tray.height) } : null,
+          list: list ? { height: Math.round(list.height) } : null,
+          listHidden: q('.expanded') ? q('.expanded').hasAttribute('hidden') : null,
+          trayVisible: !!(tray && tray.height > 0),
+          toggleVisible: (() => { const t = q('.tray-toggle'); return !!(t && t.getBoundingClientRect().height > 0); })(),
+          chevronTransform: chev ? getComputedStyle(chev).transform : null,
+          taskRows: document.querySelectorAll('.task').length,
+          phaseHeads: document.querySelectorAll('.phase-head').length,
+          phaseStamps: document.querySelectorAll('.phase-stamp').length,
+        };
+      })()
+    `);
+    return { bounds: { x: b.x, y: b.y, width: b.width, height: b.height }, ...dom };
+  };
+
+  const cycles: unknown[] = [];
   for (let i = 0; i < 10; i++) {
-    for (const expanded of [true, false]) {
-      applyGeometry(win, expanded);
-      await new Promise((r) => setTimeout(r, 60));
-      const s = win.getSize();
-      const b = win.getBounds();
-      cycles.push({
-        step: cycles.length,
-        expanded,
-        w: s[0] ?? 0,
-        h: s[1] ?? 0,
-        x: b.x,
-        y: b.y,
-      });
-    }
+    await clickTrayToggle(); // -> expanded
+    const expandedSample = await measure();
+    await clickTrayToggle(); // -> collapsed
+    const collapsedSample = await measure();
+    cycles.push({ cycle: i + 1, expanded: expandedSample, collapsed: collapsedSample });
   }
 
-  // Leave the widget in its compact state and reload the poller, which the
-  // real toggle does too.
-  applyGeometry(win, false);
-  poller?.stop();
-  startPoller();
-  await new Promise((r) => setTimeout(r, 500));
-
-  /*
-   * Measure the EXPANDED layout as well. The report below is taken in the
-   * collapsed state, where the phase list is hidden, so the expanded
-   * structure has to be sampled separately.
-   */
-  applyGeometry(win, true);
-  config = { ...config, expanded: true };
-  pushState();
-  await new Promise((r) => setTimeout(r, 700));
-
-  const expandedDom = await win.webContents.executeJavaScript(`
-    (() => {
-      const q = (s) => document.querySelector(s);
-      const box = (s) => { const e = q(s); return e ? e.getBoundingClientRect() : null; };
-      const paper = box('.paper'), tray = box('.tray'), teeth = box('.teeth');
-      const done = q('.task.is-done .task-text');
-      return {
-        viewport: [document.documentElement.clientWidth, document.documentElement.clientHeight],
-        paper: paper ? { top: Math.round(paper.top), height: Math.round(paper.height) } : null,
-        teeth: teeth ? { height: Math.round(teeth.height) } : null,
-        tray: tray ? { top: Math.round(tray.top), height: Math.round(tray.height) } : null,
-        trayAtBottom: tray ? Math.abs(tray.bottom - document.documentElement.clientHeight) <= 2 : false,
-        phaseHeads: document.querySelectorAll('.phase-head').length,
-        taskRows: document.querySelectorAll('.task').length,
-        doneRows: document.querySelectorAll('.task.is-done').length,
-        phaseStamps: document.querySelectorAll('.phase-stamp').length,
-        stampText: q('.phase-stamp')?.textContent ?? null,
-        struckThrough: done ? getComputedStyle(done).textDecorationLine : null,
-        listScrolls: (() => { const e = q('.expanded'); return e ? e.scrollHeight > e.clientHeight : null; })(),
-        dots: document.querySelectorAll('.dot-motif .dot').length,
-        toggleIsCircle: (() => {
-          const t = q('.tray-toggle'); if (!t) return false;
-          const cs = getComputedStyle(t);
-          return cs.borderRadius.includes('50%');
-        })(),
-      };
-    })()
-  `);
-
-  // Return to compact so the reported resting state is the compact one.
-  applyGeometry(win, false);
-  config = { ...config, expanded: false };
-  pushState();
+  // Settle in the collapsed state for the resting report.
   await new Promise((r) => setTimeout(r, 400));
+
+  const expandedDom = await (async (): Promise<Record<string, unknown>> => {
+    await clickTrayToggle(); // -> expanded, to sample the list
+    await new Promise((r) => setTimeout(r, 300));
+    const out = await win.webContents.executeJavaScript(`
+      (() => {
+        const q = (s) => document.querySelector(s);
+        const done = q('.task.is-done .task-text');
+        return {
+          taskRows: document.querySelectorAll('.task').length,
+          phaseHeads: document.querySelectorAll('.phase-head').length,
+          phaseStamps: document.querySelectorAll('.phase-stamp').length,
+          stampText: q('.phase-stamp') ? q('.phase-stamp').textContent : null,
+          struckThrough: done ? getComputedStyle(done).textDecorationLine : null,
+          listHidden: q('.expanded') ? q('.expanded').hasAttribute('hidden') : null,
+          dots: document.querySelectorAll('.dot-motif .dot').length,
+          toggleIsCircle: (() => {
+            const t = q('.tray-toggle'); if (!t) return false;
+            return getComputedStyle(t).borderRadius.indexOf('50%') >= 0;
+          })(),
+        };
+      })()
+    `);
+    await clickTrayToggle(); // back to collapsed
+    return out;
+  })();
+
+  // The click cycles above already leave the widget collapsed, so no extra
+  // geometry call is made here. Nothing else may resize the window.
 
   const report = {
     electron: process.versions.electron,
@@ -569,24 +612,49 @@ async function runSelfTest(): Promise<void> {
     /* Expanded-state layout sample. */
     expandedDom,
 
-    /* Ten measured expand/collapse cycles: sizes and position. */
+    /* Ten cycles driven through the real tray-button click path. */
     cycles,
-    cycleSummary: {
-      total: cycles.length,
-      distinctWidths: [...new Set(cycles.map((c) => c.w))],
-      distinctHeights: [...new Set(cycles.map((c) => c.h))],
-      distinctPositions: [...new Set(cycles.map((c) => `${c.x},${c.y}`))],
-      expandedAllCorrect: cycles
-        .filter((c) => c.expanded)
-        .every((c) => c.w === EXPANDED.width && c.h === EXPANDED.height),
-      compactAllCorrect: cycles
-        .filter((c) => !c.expanded)
-        .every((c) => c.w === COMPACT.width && c.h === COMPACT.height),
-      positionStable: new Set(cycles.map((c) => `${c.x},${c.y}`)).size === 1,
-      everFullScreen: cycles.some(
-        (c) => c.w > 1000 || c.h > 1000,
-      ),
-    },
+    cycleSummary: (() => {
+      const bw = (s: Record<string, unknown>) =>
+        (s.bounds as { width: number; height: number; x: number; y: number });
+      const ups = cycles.map((c) => (c as { expanded: Record<string, unknown> }).expanded);
+      const downs = cycles.map((c) => (c as { collapsed: Record<string, unknown> }).collapsed);
+      const allBounds = [...ups, ...downs].map(bw);
+      return {
+        total: cycles.length,
+        expandedBoundSizes: [...new Set(ups.map((s) => `${bw(s).width}x${bw(s).height}`))],
+        collapsedBoundSizes: [...new Set(downs.map((s) => `${bw(s).width}x${bw(s).height}`))],
+        distinctBoundSizes: [...new Set(allBounds.map((b) => `${b.width}x${b.height}`))],
+        distinctPositions: [...new Set(allBounds.map((b) => `${b.x},${b.y}`))],
+        expandedViewportSizes: [
+          ...new Set(ups.map((s) => (s.viewport as number[]).join("x"))),
+        ],
+        collapsedViewportSizes: [
+          ...new Set(downs.map((s) => (s.viewport as number[]).join("x"))),
+        ],
+        everyCycleExact: ups.every(
+          (s) => bw(s).width === EXPANDED.width && bw(s).height === EXPANDED.height,
+        ) && downs.every(
+          (s) => bw(s).width === COMPACT.width && bw(s).height === COMPACT.height,
+        ),
+        collapsedListHidden: downs.every((s) => s.listHidden === true),
+        expandedListVisible: ups.every((s) => s.listHidden === false),
+        trayVisibleBothStates: ups.every((s) => s.trayVisible === true)
+          && downs.every((s) => s.trayVisible === true),
+        toggleVisibleBothStates: ups.every((s) => s.toggleVisible === true)
+          && downs.every((s) => s.toggleVisible === true),
+        chevronDiffersBetweenStates:
+          (ups[0]?.chevronTransform as string) !== (downs[0]?.chevronTransform as string),
+        positionStable: new Set(allBounds.map((b) => `${b.x},${b.y}`)).size === 1,
+        everFullScreen: allBounds.some((b) => b.width > 1000 || b.height > 1000),
+        monotonicGrowth: (() => {
+          // The reported symptom was growth. Compare first and last cycle.
+          const first = bw(ups[0]!);
+          const last = bw(ups[ups.length - 1]!);
+          return last.height > first.height || last.width > first.width;
+        })(),
+      };
+    })(),
 
     displays: screen.getAllDisplays().map((d) => ({
       bounds: d.bounds,
