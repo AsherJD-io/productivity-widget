@@ -13,7 +13,7 @@
  */
 import { app, BrowserWindow, ipcMain, screen, shell } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ProjectPoller } from "../vault/poller.ts";
@@ -33,7 +33,8 @@ console.log(`main.js loaded from ${HERE}`);
 /** Defaults point at the real vault established during inspection. */
 const DEFAULT_VAULT_ROOT =
   "C:\\Users\\Asher\\Downloads\\Asher\\Dev\\Git\\Obsidian\\23asher.io";
-const DEFAULT_NOTE = "Productivity/Solar Panel Tracker.md";
+// The user renamed the project note in Obsidian; this is the live path.
+const DEFAULT_NOTE = "Productivity/To-Do List.md";
 
 export interface WidgetConfig {
   vaultRoot: string;
@@ -46,6 +47,36 @@ export interface WidgetConfig {
 
 function configPath(): string {
   return join(app.getPath("userData"), "widget-config.json");
+}
+
+/**
+ * A note path is acceptable only if it is vault-relative and stays inside the
+ * vault. This rejects absolute paths, `..` traversal, and any value that is
+ * really an executable path - all of which previously reached the reader.
+ */
+function isValidNotePath(vaultRoot: string, notePath: string): boolean {
+  if (typeof notePath !== "string" || notePath.trim() === "") return false;
+  if (isAbsolute(notePath)) return false;
+  if (/^[a-zA-Z]:/.test(notePath)) return false;
+  if (notePath.includes("\\\\")) return false;
+  if (/(^|[\\/])node_modules([\\/]|$)/.test(notePath)) return false;
+  if (/\.exe$/i.test(notePath)) return false;
+  if (!notePath.toLowerCase().endsWith(".md")) return false;
+
+  try {
+    const root = resolve(vaultRoot);
+    const full = resolve(root, notePath);
+    const rel = relative(root, full);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
+
+/** True when the configured vault root looks like the real vault. */
+function isValidVaultRoot(vaultRoot: string): boolean {
+  if (typeof vaultRoot !== "string" || vaultRoot.trim() === "") return false;
+  return vaultRoot.toLowerCase().endsWith(".io") || existsSync(vaultRoot);
 }
 
 function loadConfig(): WidgetConfig {
@@ -61,11 +92,20 @@ function loadConfig(): WidgetConfig {
     const raw = readFileSync(configPath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<WidgetConfig>;
     return {
-      vaultRoot: typeof parsed.vaultRoot === "string" ? parsed.vaultRoot : fallback.vaultRoot,
-      notePath: typeof parsed.notePath === "string" ? parsed.notePath : fallback.notePath,
+      vaultRoot: isValidVaultRoot(parsed.vaultRoot ?? "") ? parsed.vaultRoot! : fallback.vaultRoot,
       expanded: typeof parsed.expanded === "boolean" ? parsed.expanded : fallback.expanded,
       x: typeof parsed.x === "number" ? parsed.x : null,
       y: typeof parsed.y === "number" ? parsed.y : null,
+      // Reject a persisted notePath that is absolute, escapes the vault, or is
+      // not a Markdown file. This is what a poisoned config looks like.
+      notePath: isValidNotePath(
+        typeof parsed.vaultRoot === "string" && isValidVaultRoot(parsed.vaultRoot)
+          ? parsed.vaultRoot
+          : DEFAULT_VAULT_ROOT,
+        typeof parsed.notePath === "string" ? parsed.notePath : "",
+      )
+        ? (parsed.notePath as string)
+        : fallback.notePath,
     };
   } catch {
     // No config yet, or it is unreadable. Defaults are non-destructive.
@@ -460,9 +500,30 @@ const SELFTEST_OUT =
  */
 const SELFTEST_NOTE_FLAG = "--selftest-note";
 if (SELFTEST) {
-  const override = process.argv[process.argv.indexOf(SELFTEST_NOTE_FLAG) + 1];
-  if (override !== undefined && !override.startsWith("--")) {
-    config = { ...config, notePath: override, expanded: false };
+  /*
+   * SAFE argv parsing.
+   *
+   * The previous version did:
+   *   process.argv[process.argv.indexOf("--selftest-note") + 1]
+   * When the flag is absent, indexOf() returns -1, +1 makes that 0, and
+   * argv[0] is the Electron executable. That path was then assigned to
+   * config.notePath and persisted, so every later launch tried to read
+   * electron.exe as a project note and crashed the main process.
+   *
+   * The index MUST be checked for -1 before the +1 is ever used.
+   */
+  const flagIndex = process.argv.indexOf(SELFTEST_NOTE_FLAG);
+  if (flagIndex !== -1 && flagIndex + 1 < process.argv.length) {
+    const candidate = process.argv[flagIndex + 1];
+    if (
+      candidate !== undefined &&
+      !candidate.startsWith("--") &&
+      isValidNotePath(config.vaultRoot, candidate)
+    ) {
+      config = { ...config, notePath: candidate, expanded: false };
+    } else {
+      console.error(`selftest: ignoring unsafe --selftest-note value`);
+    }
   }
 }
 
@@ -579,7 +640,76 @@ async function runSelfTest(): Promise<void> {
   // The click cycles above already leave the widget collapsed, so no extra
   // geometry call is made here. Nothing else may resize the window.
 
+  /*
+   * TASK CLICK: trusted input, real file verification.
+   *
+   * This does NOT call .click(). It sends a genuine mouseDown/mouseUp at the
+   * checkbox's on-screen coordinates via webContents.sendInputEvent, which is
+   * the same path an operating-system click takes. It then reads the actual
+   * Markdown file back off disk to confirm the checkbox character changed.
+   */
+  const noteFullPath = join(config.vaultRoot, config.notePath);
+  const before = readFileSync(noteFullPath, "utf8");
+
+  applyGeometry(win, true);
+  config = { ...config, expanded: true };
+  pushState();
+  await new Promise((r) => setTimeout(r, 700));
+
+  const target = await win.webContents.executeJavaScript(`
+    (() => {
+      const row = document.querySelector('.task:not(.is-done)');
+      if (!row) return null;
+      const btn = row.querySelector('.task-box');
+      if (!btn) return null;
+      const b = btn.getBoundingClientRect();
+      const rb = row.getBoundingClientRect();
+      return {
+        id: btn.getAttribute('aria-label') ? Array.from(row.querySelectorAll('*')).length : null,
+        btn: { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: b.width, h: b.height },
+        row: { x: Math.round(rb.left + rb.width / 2), y: Math.round(rb.top + rb.height / 2) },
+        text: row.querySelector('.task-text').textContent,
+      };
+    })()
+  `);
+
+  let clickResult: Record<string, unknown> = { skipped: "no unchecked task row found" };
+  if (target) {
+    const point = target.btn as { x: number; y: number };
+    win.webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
+    win.webContents.sendInputEvent({ type: "mouseDown", x: point.x, y: point.y, button: "left", clickCount: 1 });
+    win.webContents.sendInputEvent({ type: "mouseUp", x: point.x, y: point.y, button: "left", clickCount: 1 });
+    await new Promise((r) => setTimeout(r, 900));
+
+    const after = readFileSync(noteFullPath, "utf8");
+    const changedLines = before
+      .split("\n")
+      .map((line, i) => (line === after.split("\n")[i] ? null : { i, was: line, now: after.split("\n")[i] }))
+      .filter(Boolean);
+
+    const eventLog = (await win.webContents.executeJavaScript(
+      "window.__eventLog ? window.__eventLog() : null",
+    )) as string[] | null;
+
+    clickResult = {
+      checkboxCenter: point,
+      rendererEventLog: eventLog,
+      checkboxSize: `${(target.btn as { w: number; h: number }).w}x${(target.btn as { w: number; h: number }).h}`,
+      taskText: target.text,
+      fileChangedOnDisk: before !== after,
+      changedLineCount: changedLines.length,
+      changedLines: changedLines.slice(0, 3),
+      bytesDelta: after.length - before.length,
+    };
+  }
+
+  applyGeometry(win, false);
+  config = { ...config, expanded: false };
+  pushState();
+  await new Promise((r) => setTimeout(r, 400));
+
   const report = {
+    taskClick: clickResult,
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,

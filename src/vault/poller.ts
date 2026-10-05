@@ -130,7 +130,24 @@ export class ProjectPoller {
     let lastKey: string | null = null;
 
     for (const notePath of this.#config.projectNotes) {
-      const absolutePath = resolveInVault(this.#config.vaultRoot, notePath);
+      /*
+       * resolveInVault throws PathOutsideVaultError for an unusable path.
+       * That must never escape pollNow(): the poller runs from a setTimeout
+       * in the Electron main process, where an uncaught throw opens a crash
+       * dialog and kills the widget. A bad path is a configuration problem,
+       * so it is reported through onError and the loop continues.
+       */
+      let absolutePath: string;
+      try {
+        absolutePath = resolveInVault(this.#config.vaultRoot, notePath);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        this.onError?.(error, notePath);
+        lastError = error;
+        this.#entries.set(notePath, { key: null, loaded: null });
+        continue;
+      }
+
       const key = changeKey(absolutePath);
 
       const previous = this.#entries.get(notePath);

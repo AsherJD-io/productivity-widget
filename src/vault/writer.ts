@@ -1,5 +1,5 @@
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import type { DerivedState, Task, TaskId } from "../types.ts";
 import { parseProject } from "../parse.ts";
@@ -309,10 +309,19 @@ export function setTaskChecked(request: WriteRequest, deps: WriterDeps = {}): Wr
   const expectedSource = replaceCharAt(current, checkboxOffset, intended ? "x" : " ");
 
   /* 8 + 9. Write to a temp file in the same directory, then atomically replace. */
-  const tempPath = join(
-    absolutePath.slice(0, absolutePath.lastIndexOf("/") + 1),
-    `.${notePath.slice(notePath.lastIndexOf("/") + 1)}.tmp-write`,
-  );
+  /*
+   * Temp file path, built with path helpers rather than string slicing.
+   *
+   * The previous code did:
+   *   absolutePath.slice(0, absolutePath.lastIndexOf("/") + 1)
+   * On Windows the separator is a backslash, so lastIndexOf("/") returned -1,
+   * slice(0, 0) returned "", and the temp file was written to the process
+   * working directory instead of beside the note. The subsequent rename then
+   * failed, and every checkbox click from the widget returned
+   * "atomic-write-failed" without touching the Markdown. This is why the user
+   * had to open Obsidian to tick tasks.
+   */
+  const tempPath = join(dirname(absolutePath), `.${basename(absolutePath)}.tmp-write`);
 
   try {
     io.writeFile(tempPath, expectedSource);

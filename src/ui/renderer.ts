@@ -178,8 +178,18 @@ function renderPhases(state: DerivedState): void {
       const row = document.createElement("div");
       row.className = task.done ? "task is-done" : "task";
 
-      const box = document.createElement("span");
-      box.className = "task-box";
+      /*
+       * The checkbox is a real <button>, not a span.
+       *
+       * A span has no intrinsic semantics, no keyboard activation and no
+       * guaranteed hit area, so a click could land on padding or on the
+       * decorative ::after tick. A button gives a real focusable control
+       * with an explicit box, which is what made this reliable.
+       */
+      const box = document.createElement("button");
+      box.type = "button";
+      box.className = "task-box no-drag";
+      box.setAttribute("aria-label", task.done ? "Mark incomplete" : "Mark complete");
       row.append(box);
 
       const text = document.createElement("span");
@@ -188,12 +198,32 @@ function renderPhases(state: DerivedState): void {
       row.append(text);
 
       if (task.id) {
+        const id = task.id;
         row.classList.add("is-actionable");
+
+        // The checkbox is the primary target. stopPropagation stops the row
+        // handler from firing a second toggle for the same click.
+        box.addEventListener("click", (event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          record(`checkbox:${id}`);
+          void window.widget.toggleTask(id).then(
+            (res) => record(`checkbox-done:${id}:${JSON.stringify(res)}`),
+            (err) => record(`checkbox-failed:${id}:${String(err)}`),
+          );
+        });
+
+        // The row and its text remain clickable too.
         row.addEventListener("click", () => {
-          void window.widget.toggleTask(task.id as string);
+          record(`row:${id}`);
+          void window.widget.toggleTask(id).then(
+            (res) => record(`row-done:${id}:${JSON.stringify(res)}`),
+            (err) => record(`row-failed:${id}:${String(err)}`),
+          );
         });
       } else {
         row.classList.add("is-locked");
+        box.disabled = true;
       }
 
       section.append(row);
@@ -211,6 +241,18 @@ function shortError(message: string): string {
   return message.split(":")[0] ?? message;
 }
 
+/*
+ * Bounded event log, read by the self-test to tell "click never arrived"
+ * apart from "the writer refused". This is diagnostic only and is never
+ * rendered, so the user sees no debug UI.
+ */
+const eventLog: string[] = [];
+function record(entry: string): void {
+  eventLog.push(entry);
+  if (eventLog.length > 40) eventLog.shift();
+}
+(window as unknown as Record<string, unknown>).__eventLog = () => eventLog.slice();
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) =>
     c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
@@ -218,52 +260,14 @@ function escapeHtml(value: string): string {
 }
 
 /* ------------------------------------------------------------------ *
- * Dragging
+ * Dragging is handled natively by Chromium.
  *
- * The paper head is the drag handle. Interactive children opt out with
- * .no-drag so a click never turns into a drag. There is no dark header bar in
- * the reference, so the handle is the cream title area.
+ * `.paper-head` carries -webkit-app-region: drag in the stylesheet, and every
+ * interactive element carries -webkit-app-region: no-drag. A previous
+ * revision also implemented dragging in JavaScript with mousemove and a
+ * widget:move IPC call; that was a second, competing drag mechanism and has
+ * been removed. Exactly one drag path remains and it is the native one.
  * ------------------------------------------------------------------ */
-
-function installDrag(): void {
-  const handle = document.querySelector<HTMLElement>(".paper-head");
-  if (!handle) return;
-
-  let dragging = false;
-  let startX = 0;
-  let startY = 0;
-
-  const isInteractive = (target: EventTarget | null): boolean =>
-    target instanceof Element && target.closest(".no-drag") !== null;
-
-  handle.addEventListener("mousedown", (event: MouseEvent) => {
-    if (event.button !== 0) return;
-    if (isInteractive(event.target)) return;
-
-    dragging = true;
-    startX = event.screenX;
-    startY = event.screenY;
-    event.preventDefault();
-  });
-
-  window.addEventListener("mousemove", (event: MouseEvent) => {
-    if (!dragging) return;
-    const dx = event.screenX - startX;
-    const dy = event.screenY - startY;
-    if (dx === 0 && dy === 0) return;
-    startX = event.screenX;
-    startY = event.screenY;
-    void window.widget.move(dx, dy);
-  });
-
-  window.addEventListener("mouseup", () => {
-    dragging = false;
-  });
-
-  // Never let a stray drag scroll or select the task list.
-  window.addEventListener("dragstart", (e) => e.preventDefault());
-  window.addEventListener("contextmenu", (e) => e.preventDefault());
-}
 
 expandToggle.addEventListener("click", () => {
   void window.widget.toggleExpand();
@@ -276,7 +280,6 @@ el<HTMLElement>("quest-count").addEventListener("contextmenu", (e) => {
 });
 
 window.widget.onState(render);
-installDrag();
 
 // Expose diagnostics for manual verification from the Windows side.
 (window as unknown as Record<string, unknown>).__diag = () => window.widget.diagnostics();

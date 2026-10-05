@@ -21,21 +21,24 @@
  */
 
 :root {
-  --paper: #f3e9d9;
+  --paper: #f3e9da;
   --paper-shade: #efe9dc;
   --ink: #231531;
   --frame: #231531;
-  --frame-deep: #1e1430;
+  --frame-deep: #1b1029;
   --frame-line: #3c2962;
   --frame-edge: #0b0121;
   --gold: #ca9851;
-  --gold-dim: #c99650;
+  --gold-dim: #bb8b47;
   --gold-deep: #8d6367;
   --green: #98af7b;
   --green-deep: #6f8f5a;
 
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
-  --mono: "Courier New", Courier, monospace;
+  /* Display serif: vintage print character for the title. */
+  --display: Rockwell, "Rockwell Nova", "Palatino Linotype", Palatino, Georgia, serif;
+  /* Typewriter/literary for task bodies. */
+  --serif: "Courier New", "Nimbus Mono PS", Courier, Georgia, serif;
+  --mono: "Courier New", "Nimbus Mono PS", Courier, monospace;
 }
 
 * {
@@ -74,6 +77,9 @@ body {
   display: flex;
   flex-direction: column;
   width: 100%;
+  /* The outer CASE: deep plum, visibly distinct from the cream paper and
+     wide enough to read as a casing rather than a hairline border. */
+  padding: 5px 5px 0;
   /*
    * Fills the window in BOTH states. This is what anchors the gold tray to the
    * bottom in the collapsed reference too; with `height: auto` the shell hugged
@@ -101,6 +107,35 @@ body {
   height: 100%;
 }
 
+/* ---------- drag vs click ---------- */
+
+/*
+ * The shell is a frameless, transparent window. Interactive elements must be
+ * explicitly excluded from any drag treatment rather than relying on an
+ * ancestor, so each one carries its own rule.
+ *
+ * The drag handle is .paper-head only. Task rows, the checkbox and the tray
+ * control are all -webkit-app-region: no-drag, which makes them clickable
+ * regardless of what the window considers draggable.
+ */
+.paper-head {
+  -webkit-app-region: drag;
+  cursor: move;
+}
+
+.task,
+.task-box,
+.task-text,
+.phase-head,
+.tray,
+.tray-toggle,
+.dot-motif,
+.next-block,
+.progress-row,
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
 /* ---------- cream paper ---------- */
 
 .paper {
@@ -115,8 +150,7 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   background: var(--paper);
-  border-left: 1px solid var(--frame-line);
-  border-right: 1px solid var(--frame-line);
+  border-radius: 1px;
   /* Matches the reference: the paper is inset from the shell top. */
   margin-top: 3px;
 }
@@ -130,7 +164,9 @@ body {
 }
 
 .project-title {
-  font-family: var(--serif);
+  /* Display serif, letterspaced and small-capped for a printed-label feel. */
+  font-family: var(--display);
+  letter-spacing: 0.06em;
   font-size: 11px;
   font-weight: 600;
   line-height: 1.25;
@@ -321,10 +357,15 @@ body {
 }
 
 .task-box {
+  /* A real control: generous hit area, no drag, no text selection. */
+  -webkit-app-region: no-drag;
+  appearance: none;
+  padding: 0;
+  cursor: pointer;
   flex: 0 0 auto;
-  width: 9px;
-  height: 9px;
-  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  margin: -3px 0 0 -3px;
   border: 1px solid #8d7f66;
   background: #fbf6ec;
   border-radius: 1px;
