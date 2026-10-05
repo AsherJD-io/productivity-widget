@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self';"
+    />
+    <title>Productivity Widget</title>
+    <link rel="stylesheet" href="widget.css" />
+  </head>
+  <body>
+    <!--
+      The whole widget is a drag surface EXCEPT elements marked .no-drag,
+      which are the interactive hit areas. This keeps dragging and clicking
+      from fighting each other.
+    -->
+    <div id="frame" class="frame">
+      <header class="titlebar no-drag-off">
+        <h1 id="project-title" class="project-title">Loading</h1>
+        <button id="expand-toggle" class="icon-btn no-drag" title="Expand / collapse" aria-label="Expand or collapse">
+          <span id="chevron" class="chevron"></span>
+        </button>
+      </header>
+
+      <section class="progress-block">
+        <div class="progress-meta">
+          <span id="phase-count" class="meta-label">0 phases</span>
+          <span id="fraction" class="fraction">0/0</span>
+        </div>
+        <div class="progress-track" role="progressbar" aria-labelledby="fraction">
+          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+        </div>
+      </section>
+
+      <section class="next-block">
+        <span class="next-label">next</span>
+        <span id="next-task" class="next-text">&mdash;</span>
+      </section>
+
+      <section id="expanded" class="expanded" hidden>
+        <div id="phase-list" class="phase-list"></div>
+      </section>
+
+      <footer class="footer">
+        <span id="quest-count" class="quest-count">0 remaining</span>
+        <span id="status" class="status"></span>
+      </footer>
+    </div>
+
+    <script type="module" src="renderer.js"></script>
+  </body>
+</html>

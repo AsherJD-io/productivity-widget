@@ -3,20 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Floating desktop productivity widget backed by an Obsidian vault. Phase 1: platform-agnostic domain core.",
+  "description": "Floating desktop productivity widget backed by an Obsidian vault.",
+  "main": "dist/shell/main.js",
   "engines": {
     "node": ">=22.6.0"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "dev": "npm run build && node scripts/launch.mjs",
+    "start": "npm run dev",
+    "typecheck": "tsc --noEmit",
     "test": "node --test test/",
     "test:watch": "node --test --watch test/",
     "test:verbose": "node --test --test-reporter=spec test/",
-    "typecheck": "tsc --noEmit",
     "mutate": "bash test/mutation-check.sh && bash test/mutation-reader.sh && bash test/mutation-poller.sh && bash test/mutation-scan.sh && bash test/mutation-writer.sh",
-    "verify": "npm run typecheck && npm test"
+    "verify": "npm run typecheck && npm test",
+    "smoke": "node test/smoke-real-vault.ts",
+    "measure": "node test/measure-detection.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
+    "electron": "44.5.1",
     "typescript": "7.0.2"
   }
 }
