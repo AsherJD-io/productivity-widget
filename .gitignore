@@ -14,3 +14,22 @@ desktop.ini
 # the user's Obsidian vault but must never contain a copy of it.
 *.tmp
 .*.tmp-write
+
+# electron-builder writes its unpacked output and installer logs into release/,
+# which is already ignored above. These cover the case where the build is
+# pointed at a different output directory, plus the builder's own debug dump.
+builder-debug.yml
+builder-effective-config.yaml
+
+# Self-test artefacts. The app can be launched with --selftest, which writes a
+# JSON report and PNG captures beside whatever path it is given. Run output,
+# never source.
+selftest.json
+selftest-*.png
+*-selftest.json
+*-selftest-*.png
+
+# No .env is committed. This keeps an untracked one from being added by
+# accident if one is ever created locally.
+.env
+.env.*

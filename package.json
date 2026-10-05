@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "Floating desktop productivity widget backed by an Obsidian vault.",
+  "author": "Asher",
+  "license": "UNLICENSED",
   "main": "dist/shell/main.js",
   "engines": {
     "node": ">=22.6.0"
@@ -19,11 +21,48 @@
     "mutate": "bash test/mutation-check.sh && bash test/mutation-reader.sh && bash test/mutation-poller.sh && bash test/mutation-scan.sh && bash test/mutation-writer.sh",
     "verify": "npm run typecheck && npm test",
     "smoke": "node test/smoke-real-vault.ts",
-    "measure": "node test/measure-detection.ts"
+    "measure": "node test/measure-detection.ts",
+    "package:win": "npm run build && electron-builder --win --x64 --publish never",
+    "package:dir": "npm run build && electron-builder --win --x64 --dir --publish never"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
     "electron": "44.5.1",
+    "electron-builder": "^26.15.3",
     "typescript": "7.0.2"
+  },
+  "build": {
+    "appId": "io.23asher.productivitywidget",
+    "productName": "Productivity Widget",
+    "copyright": "Copyright (c) 2026 Asher",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "ProductivityWidget-Setup-${version}-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Productivity Widget",
+      "menuCategory": false,
+      "runAfterFinish": true
+    }
   }
 }

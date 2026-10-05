@@ -1,25 +1,33 @@
 /*
- * Presentation layer. One coherent model, no accumulated overrides.
+ * Presentation layer. One coherent model, written as a single pass rather
+ * than accumulated overrides: every selector below appears exactly once.
  *
- * Measured from Screenshot 2026-10-05 004441.png (expanded) and
- * 004348.png (collapsed):
+ * Geometry is measured from the two reference screenshots, not eyeballed.
+ * Pixel scans of the PNGs (alpha is fully opaque everywhere, so the whole
+ * frame is the widget - there is no transparent margin to discount):
  *
- *   window            398 x 605          238 x 155
- *   paper             x 50..349 (300px)  x 25..215 (191px)
- *   casing            L50 R48 T33        L25 R22 T16
- *   paper height      463px              72px
- *   plum below paper  109px              32px
- *   title line 1      y47..54  ink x75..324 (250px)   <- TWO lines
- *   title line 2      y64..71  ink x111..286 (176px)
- *   title cap height  8px, baseline gap 17px, both centred on x199
- *   phase heading     7px cap, e.g. y144..150
- *   stamp             126 x 37 at x205..331, y159..196  <- BELOW the heading
- *   tray              x43..354 (311px) x 43px
- *   plum below tray   43px
- *   checkbox          12-13px square, 18px into the paper
+ *   EXPANDED  398 x 605
+ *     outer dark rim   x0..16    #17171c  (17px)  <- shadow, not casing
+ *     plum casing      x23..46   #231531  (24px)
+ *     cream paper      x49..349          (301px)
+ *     top rim                       y0..31    (32px)
+ *     paper                        y32..503  (472px)
+ *     plum band                    y505..516 (12px)
+ *     gold tray                    y518..561 (44px)
+ *     plum foot                    y563..604 (42px)
  *
- * Palette from the source: cream #f3e9da, plum #231531, indigo #3c2962,
- * mustard #ca9851. No gradients, no glass, no modern card shadow.
+ *   COLLAPSED 238 x 155
+ *     plum casing      x0..24    (25px)      paper x25..209  (185px)
+ *     top rim  y0..13  (14px)   paper y15..87 (73px)
+ *     plum band y88..95 (8px)   tray y97..123 (27px)
+ *     plum foot y124..154 (31px)
+ *
+ * The casing is reproduced as TWO layers - a dark outer rim and a plum inner
+ * band - because the source has both, and collapsing them into one fat plum
+ * margin is what previously made this read as a giant purple frame.
+ *
+ * Palette from the source: cream #f3e9da, plum #231531, rim #17171c,
+ * mustard #ca9851, completion green #98af7b. No gradients, no glass.
  */
 
 :root {
@@ -27,23 +35,58 @@
   --cream-shade: #ece2d0;
   --plum: #231531;
   --plum-deep: #1a0f26;
+  /*
+   * A SECOND purple, measured from the source: the casing below the paper and
+   * around the tray is #3c2962, not the #231531 used for the upper casing. The
+   * reference clearly has both, and using one for both loses that step.
+   */
+  --indigo: #3c2962;
+  --rim: #17171c;
   --mustard: #ca9851;
   --mustard-lit: #d9a866;
   --mustard-edge: #8d6330;
   --ink: #241a33;
   --ink-soft: #7d7059;
-  /* Completion green measured from the reference PNGs (#98af7b). The previous
-     #7d9a63 was invented; the spec calls for the source green. */
   --green: #98af7b;
   --green-deep: #7f9664;
   --green-x: #3d6b32;
   --sage-frame: #cfc4ad;
   --rule: #d5c8ae;
 
-  /* Distinctive local stacks, no remote fonts. */
-  --display: Rockwell, "Rockwell Nova", "Bookman Old Style", "URW Bookman", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-  --typewriter: "Courier New", "Nimbus Mono PS", "Liberation Mono", Courier, "Book Antiqua", Georgia, serif;
-  --mono: "Courier New", "Nimbus Mono PS", Courier, monospace;
+  /*
+   * ONE typeface for the entire widget.
+   *
+   * The widget previously mixed three faces - Constantia for the title,
+   * Courier New for task and phase text, Consolas for metadata - which read
+   * as a hybrid editorial/modern object rather than one printed thing. The
+   * reference is a single machine: a vintage typewriter face throughout.
+   *
+   * SELECTION, verified by measurement rather than assumption. Courier Prime
+   * is the preferred face but is NOT installed here: a canvas probe in the
+   * real Windows renderer measured it as unresolved, identical in every
+   * metric to a deliberately-absent control family. Courier New IS installed
+   * (cour.ttf) and measured as genuinely monospaced, with a large x-height
+   * ratio (0.783) that keeps it legible at the 6.5-12px sizes used here. It
+   * is a real typewriter face - not a browser serif, not a dev console face.
+   *
+   * Constantia and Consolas are removed deliberately: they were the source of
+   * the mixed voice and both are on the do-not-use list for this pass.
+   *
+   * `--display`, `--typewriter` and `--mono` are kept as three names because
+   * twelve existing rules reference them, but all three now resolve to the
+   * SAME stack. That makes the widget one typographic system without editing
+   * a single rule body or touching any geometry.
+   *
+   * The trailing `monospace` is a real last-resort fallback: it guarantees a
+   * monospaced rendering even where Courier New is absent, so the typewriter
+   * character survives loss of the preferred face. No web fonts, no remote
+   * assets, no network dependency.
+   */
+  --typeface: "Courier Prime", "Courier New", Courier, "Nimbus Mono PS",
+    "Liberation Mono", monospace;
+  --display: var(--typeface);
+  --typewriter: var(--typeface);
+  --mono: var(--typeface);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -51,13 +94,11 @@
 /*
  * The viewport must have a DEFINITE height.
  *
- * An earlier rewrite dropped height:100% here. Without it, .shell{height:100%}
- * had no definite parent to resolve against, so the flex column grew to fit
- * its content: with 51 fixture tasks the task region measured 1285px inside a
- * 604px window and the tray sat at y1380, off-screen. Nothing scrolled,
- * because there was no bounded box to scroll inside.
- *
- * height:100% here is what makes .expanded a real scroll container.
+ * Without height:100% here, .shell{height:100%} had no definite parent to
+ * resolve against, so the flex column grew to fit its content: with 51
+ * fixture tasks the task region measured 1285px inside a 604px window and the
+ * tray sat at y1380, off-screen. Nothing scrolled, because there was no
+ * bounded box to scroll inside.
  */
 html, body {
   width: 100%;
@@ -69,23 +110,29 @@ html, body {
   cursor: default;
 }
 
-/* ---------- outer case ---------- */
+/* ---------- outer shell: rim, casing, and the drag surface ---------- */
 
 /*
- * Casing.
+ * DRAG MODEL - native app regions only.
  *
- * Earlier I read 25/50px side casing straight off the PNGs. That measurement
- * was wrong: the classifier could not separate the plum casing from the drop
- * shadow around it, so the shadow got reproduced AS casing and the widget read
- * as a giant purple frame. The real casing is a thin plum border; the depth
- * comes from the shadow below.
+ * DRAG: the shell itself, the paper, the heading area, the plum band and the
+ * foot. Those are the empty surfaces a user grabs to move the widget.
+ * NO-DRAG: every interactive element - task rows, checkboxes, task text,
+ * the next-task block, the progress row, the tray, the dot motif, the
+ * expand/collapse button and the scrolling task region.
+ *
+ * There is exactly one drag path. No JavaScript drag handlers exist; the
+ * widget:move IPC is left in place because it is part of the frozen IPC
+ * surface, but nothing calls it for dragging.
  */
 .shell {
-  --case-x: 10px;
+  /* Collapsed boundary: 5px rim + 20px plum = 25px, paper starts at x25. */
+  --case-x: 20px;
   --case-top: 9px;
-  --tray-inset: 14px;
-  --tray-h: 26px;      /* unchanged */
-  --below-tray: 14px;
+  --tray-inset: 6px;
+  --tray-h: 27px;
+  --foot-h: 31px;
+  --band-h: 8px;
   --dot: 5px;
   --dot-gap: 4px;
 
@@ -95,64 +142,91 @@ html, body {
   height: 100%;
   max-height: 100%;
   min-height: 0;
-  background: var(--plum);
+  /*
+   * Two layers so the casing reads as a dark rim plus a thin plum band rather
+   * than one fat purple margin. The plum band is inset by the rim width.
+   */
+  background:
+    linear-gradient(var(--plum), var(--plum)) padding-box,
+    linear-gradient(var(--rim), var(--rim)) border-box;
+  /*
+   * Dark outer rim, per state. Measured: collapsed x0..4 is rim (#17171c) then
+   * plum to x22, paper from x25; expanded x0..16 is rim then plum to x46, paper
+   * from x49.
+   *
+   * These must be border-WIDTH, not the `border` shorthand: the shorthand takes
+   * a single width per side group, so `border: 13px 17px 15px` is invalid and
+   * gets dropped entirely. Declaring border-style afterwards then rendered the
+   * border at the initial `medium` = 3px, which silently collapsed the casing.
+   */
+  border-width: 5px 5px 6px;
+  border-style: solid;
+  border-color: var(--rim);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+  -webkit-app-region: drag;
+  cursor: move;
 }
 
 .shell.is-expanded {
-  --case-x: 14px;
-  --case-top: 12px;
+  --case-x: 31px;
+  /* 13px rim + 19px plum puts the paper top at y32, as measured. */
+  --case-top: 19px;
+  /* Expanded boundary: 17px rim + 31px plum = 48px, paper starts at x49. */
+  border-width: 13px 17px 15px;
   --tray-inset: 22px;
-  --tray-h: 43px;      /* unchanged */
-  --below-tray: 18px;
+  --tray-h: 44px;
+  --foot-h: 42px;
+  --band-h: 12px;
   --dot: 7px;
   --dot-gap: 6px;
 }
 
-/* Depth from a shadow, not from a fat plum border. */
-.shell {
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-}
-
-/* ---------- inner paper ---------- */
+/* ---------- cream paper ---------- */
 
 .paper {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  /*
+   * The measured boundary is 17px of rim + 31px of plum = 48px from the
+   * window edge to the paper on each side (23..46 is plum, 49 begins paper).
+   * The rim is supplied by .shell's border, so the margin here carries the
+   * plum band only.
+   */
   margin: var(--case-top) var(--case-x) 0;
-  padding: 4px 8px 4px;
+  padding: 3px 7px;
   background: var(--cream);
   color: var(--ink);
-  overflow: visible;
+  display: flex;
+  flex-direction: column;
   -webkit-app-region: drag;
   cursor: move;
 }
 
 .shell.is-expanded .paper {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   padding: 6px 12px 4px;
 }
 
 /*
- * Title. Two centred lines in the source, so it WRAPS.
- * `nowrap` forced one long line and made the composition read too wide.
+ * Heading. The source sets it on two centred lines with a 17px baseline gap,
+ * so it WRAPS inside a constrained measure rather than driving pane width.
+ * max-width is the measured ink width (250px) plus slack.
  */
 .paper-head {
   flex: 0 0 auto;
   margin-bottom: 3px;
   text-align: center;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
+  cursor: move;
 }
 
 .project-title {
   display: block;
   width: 100%;
-  max-width: 260px;
+  max-width: 272px;
   margin: 0 auto;
   font-family: var(--display);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 17px;
   letter-spacing: 0.1em;
@@ -161,32 +235,31 @@ html, body {
   color: var(--ink);
   white-space: normal;
   overflow-wrap: break-word;
-  hyphens: auto;
+  word-break: normal;
 }
 
 /*
  * COLLAPSED title: one line.
  *
- * The collapsed paper is 191px wide with 8px padding either side, leaving
- * about 175px. "YOUTUBE VIDEO EDITING TRACKER" is 27 characters, so the
- * expanded title's 11px / 0.10em tracking cannot fit and wrapped to two lines.
- *
- * State-specific only. The expanded title keeps its measured two-line
- * composition (ink 250px then 176px, 17px baseline gap) untouched.
+ * The collapsed paper is 185px wide with 7px padding either side, leaving
+ * about 171px. "YOUTUBE VIDEO EDITING TRACKER" is 27 characters, so the
+ * expanded title's 12px/0.10em tracking cannot fit. State-specific only; the
+ * expanded heading keeps its measured two-line composition.
  */
 .shell:not(.is-expanded) .project-title {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 8.5px;
-  letter-spacing: 0.02em;
+  font-size: 9px;
+  letter-spacing: 0.01em;
   line-height: 12px;
   max-width: 100%;
 }
 
-/* ---------- progress ---------- */
+/* ---------- progress: cylindrical pill ---------- */
 
 .progress-row {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -194,15 +267,9 @@ html, body {
   -webkit-app-region: no-drag;
 }
 
-/*
- * Cylindrical progress bar.
- *
- * The source tapers: green runs 96px on the first row, 97px in the middle
- * and 90px on the last (collapsed); 147/158/151 expanded. Narrowest at the
- * top and bottom rows, widest through the middle - a pill, not a rectangle.
- */
 .progress-track {
   flex: 1;
+  min-width: 0;
   height: 7px;
   background: #ddd2ba;
   border: 1px solid var(--mustard-edge);
@@ -221,7 +288,7 @@ html, body {
 .fraction {
   flex: 0 0 auto;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--ink);
 }
@@ -229,9 +296,11 @@ html, body {
 /* ---------- next task ---------- */
 
 .next-block {
+  flex: 0 0 auto;
   display: flex;
   align-items: baseline;
   gap: 5px;
+  min-width: 0;
   -webkit-app-region: no-drag;
 }
 
@@ -254,32 +323,48 @@ html, body {
   font-size: 9px;
   line-height: 1.25;
   color: var(--ink);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-/* ---------- expanded list ---------- */
+/* ---------- task/phase region: the ONLY scroll container ---------- */
 
+/*
+ * Structure, top to bottom, all fixed except this box:
+ *   title (fixed) / progress (fixed) / next task (fixed)
+ *   -> .expanded scrolls vertically
+ *   -> plum band (fixed) / gold tray (fixed) / foot (fixed)
+ *
+ * overflow-x is CLIP, not hidden. CSS forces a `hidden` axis to compute as
+ * `auto` when the other axis is scrollable, so `overflow-x: hidden` alongside
+ * `overflow-y: auto` silently leaves a 1px horizontal scroll range (measured:
+ * scrollWidth 269 vs clientWidth 268, scrollLeft would move to 1). `clip`
+ * does not force the sibling axis, so no horizontal scrolling is possible.
+ * Every text child below wraps rather than widening its parent.
+ */
 .expanded {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: clip;
   overscroll-behavior: contain;
   margin-top: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--mustard-edge) var(--cream-shade);
   -webkit-app-region: no-drag;
+  cursor: default;
 }
 
 .expanded::-webkit-scrollbar { width: 5px; }
 .expanded::-webkit-scrollbar-track { background: var(--cream-shade); }
 .expanded::-webkit-scrollbar-thumb { background: var(--mustard-edge); }
 
+.phase-list { min-width: 0; }
+
 .phase {
   margin-bottom: 4px;
+  min-width: 0;
+  max-width: 100%;
   -webkit-app-region: no-drag;
 }
 
@@ -300,9 +385,8 @@ html, body {
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .phase-tally {
@@ -313,31 +397,26 @@ html, body {
 }
 
 /*
- * PHASE COMPLETE.
+ * PHASE COMPLETE - a printed sticker, not a green pill.
  *
- * Measured: a warm 126 x 37 region at x205..331, y159..196 - BELOW the
- * heading band (y144..150), right aligned, paper ends at x349.
- *
- * It sits in normal flow, not absolutely positioned with a negative offset,
- * because the absolute version was clipped by the paper and lost its top.
- * Not a green pill: the source has no green region of this size.
+ * Measured in the source: a warm 126 x 37 region at x205..331, y159..196,
+ * below the heading band and right aligned. It stays in normal flow inside
+ * .phase-stamp-row because an absolutely positioned version was clipped by
+ * the paper and lost its top edge.
  */
 .phase-stamp-row {
   display: flex;
   justify-content: flex-end;
-  padding: 2px 0 1px;
+  /*
+   * 1px of right padding absorbs the stamp's rotation overhang. The stamp is
+   * rotated -8deg, so its painted bounding box is ~0.54px wider than its
+   * layout box; right-aligned, that pushed it past the scroll container's
+   * padding edge and registered as 1px of horizontal scroll range.
+   */
+  padding: 2px 1px 1px 0;
   pointer-events: none;
 }
 
-/*
- * PHASE COMPLETE, measured from the reference: a long shallow rectangle about
- * 6:1, square corners (not a pill), a thin double gold rule with faded
- * semi-transparent ochre ink, tilted ~8 degrees counter-clockwise.
- *
- * Placement stays in normal flow inside .phase-stamp-row, directly below the
- * heading, because a8fd565 found the absolutely positioned version clipped
- * against the paper and lost its top edge.
- */
 .phase-stamp {
   flex: 0 0 auto;
   font-family: var(--typewriter);
@@ -368,6 +447,8 @@ html, body {
   display: flex;
   align-items: flex-start;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   padding: 1px 0;
   -webkit-app-region: no-drag;
   cursor: pointer;
@@ -376,15 +457,17 @@ html, body {
 .task:hover { background: #efe6d4; }
 .task.is-locked { cursor: default; opacity: 0.7; }
 
-/* Printed checkbox: 12px square with a wider invisible hit margin. */
+/*
+ * Printed checkbox. Measured in the source: a ~15px square with a ~2px pale
+ * sage frame, square corners, cream interior when unchecked, and a chunky
+ * dark-green X when complete. appearance:none removes the browser default.
+ */
 .task-box {
   -webkit-app-region: no-drag;
   appearance: none;
   -webkit-appearance: none;
   position: relative;
   flex: 0 0 auto;
-  /* Measured in the reference: a ~15px square with a ~2px pale sage frame,
-     square corners, cream interior when unchecked. */
   width: 15px;
   height: 15px;
   margin: 1px 0 0 2px;
@@ -396,16 +479,21 @@ html, body {
 }
 
 /*
- * ::before is the clickable hit-area expander, kept above the glyphs so the
- * whole padded area stays clickable while the strokes draw underneath it.
+ * Clickable hit-area expander, kept above the glyph strokes.
+ *
+ * Vertical expansion only. With left/right:-5px the pseudo-element made the
+ * box 16px of scroll width inside an 11px content box, which pushed
+ * .expanded's scrollWidth past its clientWidth and registered as horizontal
+ * overflow. The row itself is already clickable, so a vertical-only expander
+ * keeps the target generous without any horizontal bleed.
  */
 .task-box::before {
   content: "";
   position: absolute;
-  left: -5px;
-  right: -5px;
-  top: -5px;
-  bottom: -5px;
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
   z-index: 2;
 }
 
@@ -415,10 +503,9 @@ html, body {
 }
 
 /*
- * The completion mark in the reference is an X, not a checkmark: a chunky
- * dark-forest-green X filling most of the square. Drawn as painted bars rather
- * than a rotated border corner, which is what a tick needs, so the glyph cannot
- * drift back into a check shape at other sizes.
+ * The completion mark is an X, not a checkmark. Drawn as painted bars rather
+ * than a rotated border corner, which is what a tick needs, so the glyph
+ * cannot drift back into a check shape.
  */
 .task-box::after {
   content: "";
@@ -437,6 +524,7 @@ html, body {
 .task.is-done .task-box::after {
   transform: rotate(45deg) scale(1);
 }
+
 .task.is-done .task-box::before {
   left: 50%;
   right: auto;
@@ -453,11 +541,13 @@ html, body {
 .task-text {
   flex: 1;
   min-width: 0;
+  max-width: 100%;
   font-family: var(--typewriter);
   font-size: 9px;
   line-height: 1.35;
   color: var(--ink);
-  word-break: break-word;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .task.is-done .task-text {
@@ -467,41 +557,25 @@ html, body {
   text-decoration-color: var(--green-deep);
 }
 
-/* ---------- toothed transition ---------- */
+/* ---------- plum band above the tray ---------- */
 
 /*
- * The sawtooth along the cream paper's lower edge, where it meets the casing
- * immediately above the gold tray. Two 45deg gradients tiled at 16px produce
- * the alternating plum teeth; no images and no extra elements needed.
- *
- * The previous version was height:0 when collapsed, i.e. present in the DOM but
- * rendering nothing, and used a 135deg repeating gradient when expanded, which
- * reads as diagonal hatching rather than as teeth.
- */
-/*
- * The plum reveal band between the cream paper's lower edge and the gold tray.
- *
- * Measured from the reference PNGs, not inferred: collapsed runs y87..y95
- * (about 7-8px) and expanded y505..y517 (about 13px), each a flat band whose
- * only variation is two counts in one channel (e.g. #3a2960 vs #3a2962). There
- * are no teeth, no notches and no serrations.
- *
- * An earlier pass added a 45deg gradient pair and then a repeating SVG
- * triangle mask here, on the belief that this edge was a sawtooth. Measurement
- * does not support that, so it is a plain band.
+ * Measured from the reference PNGs: collapsed y88..y95 (about 8px) and
+ * expanded y505..y517 (about 12px), each a flat band whose only variation is
+ * two counts in one channel (e.g. #3a2960 vs #3a2962). There are no teeth,
+ * notches or serrations - an earlier pass added a sawtooth on the belief that
+ * this edge was toothed, and measurement does not support it.
  */
 .teeth {
   flex: 0 0 auto;
-  height: 8px;
+  height: var(--band-h);
   margin: 0 var(--case-x);
-  background: var(--plum);
+  background: var(--indigo);
+  -webkit-app-region: drag;
+  cursor: move;
 }
 
-.shell.is-expanded .teeth {
-  height: 12px;
-}
-
-/* ---------- gold bottom assembly: source-relative size, not shrunk ---------- */
+/* ---------- gold tray ---------- */
 
 .tray {
   flex: 0 0 auto;
@@ -520,14 +594,13 @@ html, body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--dot-gap);
   -webkit-app-region: no-drag;
 }
 
 /*
- * Three-dot motif. Measured in the source: 5px diameter at x28/37/46
- * (pitch ~9px) in the collapsed tray, 7-8px at x53/66/80 (pitch ~13px) in
- * the expanded tray. Previously 4px, which was too small.
+ * Three-dot motif. Measured in the source: ~5px diameter at ~9px pitch in the
+ * collapsed tray, ~7px at ~13px pitch expanded.
  */
 .dot {
   width: var(--dot);
@@ -544,7 +617,7 @@ html, body {
   min-width: 0;
   text-align: center;
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: #33200a;
@@ -567,83 +640,26 @@ html, body {
 
 .status.is-error { color: #6d1c12; }
 
+/* ---------- expand/collapse control ---------- */
+
+/*
+ * Printed instrument rather than a default button: cream face, plum ring, an
+ * inset cream bevel, and a triangular chevron as a printed mark.
+ */
 .tray-toggle {
   flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   display: grid;
   place-items: center;
   background: var(--cream);
   border: 1.5px solid var(--plum);
   border-radius: 50%;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-
-.tray-toggle:hover { background: #fff; }
-.tray-toggle:active { transform: translateY(0.5px); }
-
-.chevron {
-  width: 0;
-  height: 0;
-  border-left: 3px solid transparent;
-  border-right: 3px solid transparent;
-  border-top: 4px solid var(--plum);
-  margin-top: 2px;
-  transition: transform 110ms ease;
-}
-
-.shell.is-expanded .chevron { transform: rotate(180deg); }
-
-/* Plum continues below the tray, as measured. */
-.case-foot {
-  flex: 1 1 auto;
-  min-height: var(--below-tray);
-  background: var(--plum);
-}
-
-/* ---------- content wrapping ---------- */
-
-/*
- * Every text element wraps inside its box. Long task text must never create
- * horizontal overflow or push the pane wider; the overflow is reached by
- * vertical scroll instead.
- *
- * Compact controls (title, phase names, fraction, quest count, stamps) keep
- * their own nowrap/ellipsis rules and are deliberately NOT included here.
- */
-.next-text,
-.task-text,
-.empty,
-.notice {
-  white-space: normal;
-  word-break: normal;
-  overflow-wrap: anywhere;
-}
-
-.phase {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.task,
-.task > * {
-  min-width: 0;
-  max-width: 100%;
-}
-
-/* ---------- expand/collapse control: printed instrument, not a default button ---------- */
-
-.tray-toggle {
-  width: 16px;
-  height: 16px;
-  background: var(--cream);
-  border: 1.5px solid var(--plum);
-  border-radius: 50%;
   box-shadow: inset 0 0 0 1.5px rgba(243, 233, 218, 0.9);
   cursor: pointer;
   position: relative;
+  -webkit-app-region: no-drag;
 }
 
 .tray-toggle:hover {
@@ -656,7 +672,6 @@ html, body {
   box-shadow: inset 0 1px 2px rgba(35, 21, 49, 0.35);
 }
 
-/* The chevron is drawn as a printed mark inside the ring. */
 .chevron {
   width: 0;
   height: 0;
@@ -665,6 +680,21 @@ html, body {
   border-top: 4.5px solid var(--plum);
   margin-top: 2.5px;
   transition: transform 110ms ease;
+}
+
+.shell.is-expanded .chevron { transform: rotate(180deg); }
+
+/*
+ * Plum continues below the tray at the measured height: 31px collapsed,
+ * 42px expanded. Fixed, not flex-grow - when this was flex:1 it absorbed all
+ * leftover space and left 117px of empty purple under the tray.
+ */
+.case-foot {
+  flex: 0 0 auto;
+  height: var(--foot-h);
+  background: var(--indigo);
+  -webkit-app-region: drag;
+  cursor: move;
 }
 
 /* ---------- empty / error ---------- */
@@ -676,6 +706,8 @@ html, body {
   line-height: 1.5;
   color: var(--ink-soft);
   background: var(--cream);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .empty strong { color: var(--ink); }

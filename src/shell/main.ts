@@ -147,40 +147,86 @@ const COMPACT = { width: 238, height: 155 } as const;
 const EXPANDED = { width: 398, height: 605 } as const;
 
 /*
- * Measured on this machine: requesting 238x155 produced a window measuring
- * 239x156, and 398x605 produced 399x606. Chromium keeps a 1px invisible frame
- * on each axis of a frameless window; `thickFrame: false` does not remove it.
+ * MEASURED, not assumed. A probe on this machine (scripts/geom-content.mjs,
+ * display scaleFactor 1.25) recorded, for a frameless transparent window:
  *
- * The reference dimensions are what the WIDGET must measure, so the size
- * actually requested is reduced by 1px per axis to land exactly on them.
+ *   request 238x155  ->  size 239x156  content 239x156  inner 239x156
+ *   request 398x605  ->  size 399x606  content 399x606  inner 399x606
+ *
+ * Two facts follow, and both matter:
+ *
+ * 1. getContentSize() === getSize() for this window. There is NO outer frame
+ *    to subtract: the content box and the window box are the same rectangle.
+ *    So "use content semantics" and "use window semantics" are the SAME
+ *    coordinate system here, and mixing them was never the fault.
+ *
+ * 2. Requesting N produces N+1. Chromium reserves a 1px invisible border on a
+ *    frameless window and `thickFrame: false` does not remove it. This is a
+ *    real, constant inset at this display scale, so it is subtracted once, in
+ *    one place, to land the renderer on the reference dimensions exactly.
+ *
+ * The previous note claimed this constant was "stale". It was not. It is
+ * exactly what makes 238x155 come out as 238x155. The real fault is recorded
+ * on applyGeometry below.
  */
-const FRAME_COMPENSATION = 1;
+const FRAME_INSET = 1;
 
 type Geometry = { width: number; height: number };
 
+/**
+ * Convert a CONTENT target into the WINDOW size that must be requested to make
+ * the renderer measure that target. This is the only conversion in the file.
+ */
 function geometryFor(expanded: boolean): Geometry {
   const target = expanded ? EXPANDED : COMPACT;
-  // Subtract the measured invisible frame so the window lands exactly on the
-  // reference dimensions rather than 1px beyond them.
   return {
-    width: target.width - FRAME_COMPENSATION,
-    height: target.height - FRAME_COMPENSATION,
+    width: target.width - FRAME_INSET,
+    height: target.height - FRAME_INSET,
   };
 }
 
 /**
  * Put the window into one of the two fixed geometries.
  *
- * Assigns absolute bounds anchored on the current top-left, so the widget
- * keeps its position and the size can never accumulate across toggles. This
- * is the single place window geometry is decided; the toggle button and the
- * self-test both go through it.
+ * This is the single place window geometry is decided. The constructor, the
+ * toggle button and the self-test all go through it, which is the whole fix:
+ *
+ * THE ACTUAL BUG. The BrowserWindow constructor path and the setBounds path
+ * are not equivalent on Windows. Constructing a frameless window below
+ * Windows' minimum frameless size is silently CLAMPED UP: a request of
+ * 237x154 came back as 242x159. Nothing re-applied geometry after load, so
+ * the widget rested at 242x156 - about 4px wider than the reference - and the
+ * paper was clipped on the right. Toggling worked, because setBounds is not
+ * clamped, so the two paths disagreed: rest 242x156, toggled 238x155.
+ *
+ * Constructing with `useContentSize: true` does NOT avoid the clamp - it was
+ * measured and returns identical numbers. The clamp is Windows-side, so the
+ * fix is to stop trusting the constructor and re-assert geometry once the
+ * window exists, which applyGeometryAfterLoad does.
+ *
+ * Bounds are absolute and anchored on the current top-left, so the widget
+ * keeps its position and the size can never accumulate across toggles.
  */
 function applyGeometry(win: BrowserWindow, expanded: boolean): void {
   if (win.isDestroyed()) return;
   const target = geometryFor(expanded);
   const b = win.getBounds();
   win.setBounds({ x: b.x, y: b.y, width: target.width, height: target.height });
+}
+
+/**
+ * Re-assert geometry once the native window actually exists.
+ *
+ * Called after creation and again after the first paint, because the
+ * constructor's clamped size is what produced the right-edge clipping.
+ */
+function applyGeometryAfterLoad(win: BrowserWindow, expanded: boolean): void {
+  applyGeometry(win, expanded);
+  if (win.isDestroyed()) return;
+  win.webContents.once("did-finish-load", () => applyGeometry(win, expanded));
+  // Belt and braces: the clamp is applied during native window creation, so a
+  // second assertion after the first frame rules out any ordering surprise.
+  setTimeout(() => applyGeometry(win, expanded), 250);
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -200,18 +246,16 @@ function createWindow(): BrowserWindow {
     config.x !== null && config.y !== null ? { x: config.x, y: config.y } : {};
 
   const win = new BrowserWindow({
+    /*
+     * COMPACT and EXPANDED are CONTENT (renderer) dimensions, so the window is
+     * declared in content terms and every size call in this file is converted
+     * by the single geometryFor() helper. One coherent model: content in,
+     * window request out, no ad-hoc pixel arithmetic anywhere else.
+     */
+    useContentSize: true,
     width: size.width,
     height: size.height,
     ...position,
-    /*
-     * useContentSize is deliberately NOT set.
-     *
-     * For a frameless window the content box already equals the window box,
-     * so it only adds ambiguity. Worse, it made setMinimumSize/setMaximumSize
-     * content-relative while setBounds stayed window-relative, and mixing the
-     * two is what allowed the reported drift. Every size call in this file
-     * is now unambiguously a window bound.
-     */
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -246,8 +290,25 @@ function createWindow(): BrowserWindow {
 
   // Hard limits. Nothing, including a stray IPC call, can grow the widget
   // past EXPANDED or shrink it below COMPACT.
-  win.setMinimumSize(COMPACT.width, COMPACT.height);
-  win.setMaximumSize(EXPANDED.width, EXPANDED.height);
+  //
+  // Set in the SAME coordinate system as every other size call here: the
+  // window request produced by geometryFor(), i.e. already inset by
+  // FRAME_INSET. Using the raw COMPACT/EXPANDED content numbers would set a
+  // limit one pixel looser than the geometry that must satisfy it, which is
+  // precisely the kind of unit mismatch this file previously had.
+  const min = geometryFor(false);
+  const max = geometryFor(true);
+  win.setMinimumSize(min.width, min.height);
+  win.setMaximumSize(max.width, max.height);
+
+  /*
+   * Re-assert geometry now and after load.
+   *
+   * The constructor's size is clamped up by Windows (237x154 -> 242x159) and
+   * never corrected, which left the widget resting ~4px too wide with the
+   * paper clipped on the right. These calls are what fix the reported bug.
+   */
+  applyGeometryAfterLoad(win, config.expanded);
 
   void win.loadFile(join(HERE, "..", "ui", "index.html"));
 
@@ -468,6 +529,7 @@ ipcMain.handle("widget:diagnostics", () => {
       bounds: d.bounds,
       scaleFactor: d.scaleFactor,
     })),
+    autostart: loginItemState(),
   };
 });
 
@@ -583,6 +645,10 @@ async function runSelfTest(): Promise<void> {
         const chev = q('.chevron');
         return {
           viewport: [document.documentElement.clientWidth, document.documentElement.clientHeight],
+          // Authoritative renderer size, recorded explicitly. The CONTENT
+          // target must match this, not getSize().
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
           shell: shell ? { w: Math.round(shell.width), h: Math.round(shell.height) } : null,
           paper: paper ? { top: Math.round(paper.top), height: Math.round(paper.height) } : null,
           tray: tray ? { top: Math.round(tray.top), height: Math.round(tray.height) } : null,
@@ -594,10 +660,43 @@ async function runSelfTest(): Promise<void> {
           taskRows: document.querySelectorAll('.task').length,
           phaseHeads: document.querySelectorAll('.phase-head').length,
           phaseStamps: document.querySelectorAll('.phase-stamp').length,
+          /*
+           * Native drag regions, asserted from computed style rather than
+           * assumed from the stylesheet. Exactly one drag path must exist: the
+           * native one. Interactive elements must opt OUT of it.
+           */
+          dragRegions: (() => {
+            const region = (sel) => {
+              const el = q(sel);
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return {
+                region: getComputedStyle(el).webkitAppRegion || 'none',
+                visible: r.width > 0 && r.height > 0,
+              };
+            };
+            return {
+              // MUST be draggable.
+              shell: region('.shell'),
+              paperHead: region('.paper-head'),
+              // MUST NOT be draggable.
+              task: region('.task'),
+              taskBox: region('.task-box'),
+              taskText: region('.task-text'),
+              tray: region('.tray'),
+              trayToggle: region('.tray-toggle'),
+              expandedPane: region('.expanded'),
+            };
+          })(),
         };
       })()
     `);
-    return { bounds: { x: b.x, y: b.y, width: b.width, height: b.height }, ...dom };
+    return {
+      bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
+      getSize: win.getSize(),
+      getContentSize: win.getContentSize(),
+      ...dom,
+    };
   };
 
   const cycles: unknown[] = [];
@@ -642,20 +741,61 @@ async function runSelfTest(): Promise<void> {
   // geometry call is made here. Nothing else may resize the window.
 
   /*
-   * TASK CLICK: trusted input, real file verification.
+   * TASK CLICK: trusted input, real file verification, ISOLATED FIXTURE.
    *
    * This does NOT call .click(). It sends a genuine mouseDown/mouseUp at the
    * checkbox's on-screen coordinates via webContents.sendInputEvent, which is
-   * the same path an operating-system click takes. It then reads the actual
-   * Markdown file back off disk to confirm the checkbox character changed.
+   * the same path an operating-system click takes, then reads the Markdown
+   * file back off disk to confirm the checkbox character changed.
+   *
+   * It runs against a TEMPORARY FIXTURE, never the user's real note.
+   *
+   * This was a real defect, not a theoretical one. The previous revision ran
+   * this test against the live configured note, so every self-test run ticked
+   * a real task off the user's To-Do List. Two of the user's tasks were
+   * checked off this way and had to be reverted by hand. The writer path is
+   * unchanged and still fully exercised; only the target file is now a
+   * throwaway in tmpdir(), exactly as the overflow test already does.
    */
-  const noteFullPath = join(config.vaultRoot, config.notePath);
-  const before = readFileSync(noteFullPath, "utf8");
+  const clickRoot = join(tmpdir(), "widget-click-fixture");
+  const clickRel = "Click Fixture.md";
+  const clickFullPath = join(clickRoot, clickRel);
+  mkdirSync(clickRoot, { recursive: true });
+  writeFileSync(
+    clickFullPath,
+    [
+      "---",
+      "project: Click Fixture",
+      "---",
+      "",
+      "# Click Fixture",
+      "",
+      "## Phase One",
+      "- [ ] Isolated click-path task that must never touch the real note ^clk-01",
+      "- [ ] A second isolated task ^clk-02",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 
+  const realVault = { vaultRoot: config.vaultRoot, notePath: config.notePath };
+  /*
+   * Snapshot of the real note taken BEFORE the click test, so the report can
+   * prove the click never touched it. Read once, here, for that assertion
+   * only; the click itself targets the fixture.
+   */
+  const REAL_NOTE_SNAPSHOT = readFileSync(
+    join(realVault.vaultRoot, realVault.notePath),
+    "utf8",
+  );
+  config = { ...config, vaultRoot: clickRoot, notePath: clickRel, expanded: true };
+  poller?.stop();
+  startPoller();
+
+  const before = readFileSync(clickFullPath, "utf8");
   applyGeometry(win, true);
-  config = { ...config, expanded: true };
   pushState();
-  await new Promise((r) => setTimeout(r, 700));
+  await new Promise((r) => setTimeout(r, 900));
 
   const target = await win.webContents.executeJavaScript(`
     (() => {
@@ -682,7 +822,7 @@ async function runSelfTest(): Promise<void> {
     win.webContents.sendInputEvent({ type: "mouseUp", x: point.x, y: point.y, button: "left", clickCount: 1 });
     await new Promise((r) => setTimeout(r, 900));
 
-    const after = readFileSync(noteFullPath, "utf8");
+    const after = readFileSync(clickFullPath, "utf8");
     const changedLines = before
       .split("\n")
       .map((line, i) => (line === after.split("\n")[i] ? null : { i, was: line, now: after.split("\n")[i] }))
@@ -693,6 +833,12 @@ async function runSelfTest(): Promise<void> {
     )) as string[] | null;
 
     clickResult = {
+      /* Proves the click went to the fixture, never the user's note. */
+      fixturePath: clickFullPath,
+      realNoteUntouched:
+        !realVault.notePath.includes("Click Fixture") &&
+        readFileSync(join(realVault.vaultRoot, realVault.notePath), "utf8") ===
+          REAL_NOTE_SNAPSHOT,
       checkboxCenter: point,
       rendererEventLog: eventLog,
       checkboxSize: `${(target.btn as { w: number; h: number }).w}x${(target.btn as { w: number; h: number }).h}`,
@@ -704,10 +850,13 @@ async function runSelfTest(): Promise<void> {
     };
   }
 
+  config = { ...config, ...realVault, expanded: false };
+  rmSync(clickRoot, { recursive: true, force: true });
   applyGeometry(win, false);
-  config = { ...config, expanded: false };
   pushState();
-  await new Promise((r) => setTimeout(r, 400));
+  poller?.stop();
+  startPoller();
+  await new Promise((r) => setTimeout(r, 600));
 
   /*
    * OVERFLOW TEST using a temporary fixture note.
@@ -747,6 +896,9 @@ async function runSelfTest(): Promise<void> {
   await new Promise((r) => setTimeout(r, 1200));
 
   const boundsBeforeOverflow = { ...win.getBounds() };
+  const rendererBeforeOverflow = await win.webContents.executeJavaScript(
+    "[window.innerWidth, window.innerHeight]",
+  ) as number[];
   const overflowDom = await win.webContents.executeJavaScript(`
     (() => {
       const q = (s) => document.querySelector(s);
@@ -774,6 +926,9 @@ async function runSelfTest(): Promise<void> {
     })()
   `);
   const boundsAfterOverflow = { ...win.getBounds() };
+  const rendererAfterOverflow = await win.webContents.executeJavaScript(
+    "[window.innerWidth, window.innerHeight]",
+  ) as number[];
 
   // Restore the real note and remove the fixture.
   config = { ...config, vaultRoot: DEFAULT_VAULT_ROOT, notePath: DEFAULT_NOTE, expanded: false };
@@ -791,9 +946,13 @@ async function runSelfTest(): Promise<void> {
       heightUnchanged:
         boundsBeforeOverflow.height === boundsAfterOverflow.height,
       widthUnchanged: boundsBeforeOverflow.width === boundsAfterOverflow.width,
+      // Judge fixed size on the RENDERER, for the same reason as above.
+      rendererBefore: rendererBeforeOverflow,
+      rendererAfter: rendererAfterOverflow,
+      rendererSizeFixed: rendererBeforeOverflow.join("x") === rendererAfterOverflow.join("x"),
       ...overflowDom,
     },
-    taskClick: clickResult,
+    taskClick: { ...clickResult, fixtureRemoved: !existsSync(clickRoot) },
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
@@ -803,24 +962,56 @@ async function runSelfTest(): Promise<void> {
     window: {
       visible: win.isVisible(),
       focused: win.isFocused(),
-      frameless: !win.isMovable() ? "unknown" : "movable",
       alwaysOnTop: win.isAlwaysOnTop(),
-      alwaysOnTopLevel: "screen-saver (requested)",
       fullScreenable: win.isFullScreenable(),
       minimizable: win.isMinimizable(),
       resizable: win.isResizable(),
-      skipTaskbar: "requested via setSkipTaskbar(true)",
-      opacitySupported: true,
       x: pos[0] ?? null,
       y: pos[1] ?? null,
-      width: size[0] ?? null,
-      height: size[1] ?? null,
+      /*
+       * Resting state, captured after all geometry has settled. This is the
+       * figure that exposed the bug: the constructor clamped the window up to
+       * 242x156 and nothing corrected it, so the widget rested ~4px wider than
+       * its content target and clipped the paper on the right.
+       */
+      getSize: win.getSize(),
+      getContentSize: win.getContentSize(),
       bounds,
-      // Fixed states this build allows. Nothing outside these two is reachable.
+      renderer: {
+        innerWidth: await win.webContents.executeJavaScript("window.innerWidth"),
+        innerHeight: await win.webContents.executeJavaScript("window.innerHeight"),
+        clientWidth: await win.webContents.executeJavaScript(
+          "document.documentElement.clientWidth",
+        ),
+        clientHeight: await win.webContents.executeJavaScript(
+          "document.documentElement.clientHeight",
+        ),
+        devicePixelRatio: await win.webContents.executeJavaScript("window.devicePixelRatio"),
+        /*
+         * The reported symptom, measured rather than eyeballed: does the paper
+         * fit inside the viewport, with its right casing visible rather than
+         * clipped past the right edge?
+         */
+        paperRightCasingVisible: await win.webContents.executeJavaScript(
+          "(() => { const p = document.querySelector('.paper'); if (!p) return null;" +
+            " const r = p.getBoundingClientRect();" +
+            " return { paperRight: Math.round(r.right), viewportWidth: document.documentElement.clientWidth," +
+          " clippedRight: r.right > document.documentElement.clientWidth + 0.5 }; })()",
+        ),
+      },
       expectedCompact: COMPACT,
       expectedExpanded: EXPANDED,
-      matchesCompact: size[0] === COMPACT.width && size[1] === COMPACT.height,
-      matchesExpanded: size[0] === EXPANDED.width && size[1] === EXPANDED.height,
+      /*
+       * The gate that matters: does the RENDERER measure the content target?
+       * getSize() is the native window rect and is expected to be 1px larger
+       * per axis on this display; it is recorded, not asserted.
+       */
+      restRendererMatchesCompact: config.expanded
+        ? false
+        : (await win.webContents.executeJavaScript(
+            "window.innerWidth === 238 && window.innerHeight === 155",
+          )) === true,
+      frameInset: FRAME_INSET,
     },
 
     /* Expanded-state layout sample. */
@@ -829,13 +1020,39 @@ async function runSelfTest(): Promise<void> {
     /* Ten cycles driven through the real tray-button click path. */
     cycles,
     cycleSummary: (() => {
+      /*
+       * Judged on the RENDERER's own dimensions, not on getBounds().
+       *
+       * getBounds() is the native window rect and legitimately differs from
+       * the content target by the measured 1px invisible border. Asserting
+       * bounds against a content target is a category error, and it is what
+       * made this report read "not matching" while the renderer was in fact
+       * exactly on target. innerWidth/innerHeight is the authoritative figure.
+       */
+      const inner = (s: Record<string, unknown>) =>
+        `${s.innerWidth}x${s.innerHeight}`;
       const bw = (s: Record<string, unknown>) =>
         (s.bounds as { width: number; height: number; x: number; y: number });
       const ups = cycles.map((c) => (c as { expanded: Record<string, unknown> }).expanded);
       const downs = cycles.map((c) => (c as { collapsed: Record<string, unknown> }).collapsed);
       const allBounds = [...ups, ...downs].map(bw);
+      const COMPACT_S = `${COMPACT.width}x${COMPACT.height}`;
+      const EXPANDED_S = `${EXPANDED.width}x${EXPANDED.height}`;
       return {
         total: cycles.length,
+        expandedRendererSizes: [...new Set(ups.map(inner))],
+        collapsedRendererSizes: [...new Set(downs.map(inner))],
+        expandedContentSizes: [
+          ...new Set(ups.map((s) => (s.getContentSize as number[]).join("x"))),
+        ],
+        collapsedContentSizes: [
+          ...new Set(downs.map((s) => (s.getContentSize as number[]).join("x"))),
+        ],
+        expandedWindowSizes: [...new Set(ups.map((s) => (s.getSize as number[]).join("x")))],
+        collapsedWindowSizes: [...new Set(downs.map((s) => (s.getSize as number[]).join("x")))],
+        distinctRendererSizes: [
+          ...new Set([...ups, ...downs].map(inner)),
+        ],
         expandedBoundSizes: [...new Set(ups.map((s) => `${bw(s).width}x${bw(s).height}`))],
         collapsedBoundSizes: [...new Set(downs.map((s) => `${bw(s).width}x${bw(s).height}`))],
         distinctBoundSizes: [...new Set(allBounds.map((b) => `${b.width}x${b.height}`))],
@@ -846,11 +1063,10 @@ async function runSelfTest(): Promise<void> {
         collapsedViewportSizes: [
           ...new Set(downs.map((s) => (s.viewport as number[]).join("x"))),
         ],
-        everyCycleExact: ups.every(
-          (s) => bw(s).width === EXPANDED.width && bw(s).height === EXPANDED.height,
-        ) && downs.every(
-          (s) => bw(s).width === COMPACT.width && bw(s).height === COMPACT.height,
-        ),
+        /* The pass/fail gate: renderer inner size equals the content target. */
+        collapsedRendererExact: downs.every((s) => inner(s) === COMPACT_S),
+        expandedRendererExact: ups.every((s) => inner(s) === EXPANDED_S),
+        noExtraSizes: new Set([...ups, ...downs].map(inner)).size === 2,
         collapsedListHidden: downs.every((s) => s.listHidden === true),
         expandedListVisible: ups.every((s) => s.listHidden === false),
         trayVisibleBothStates: ups.every((s) => s.trayVisible === true)
@@ -958,8 +1174,302 @@ async function runSelfTest(): Promise<void> {
       })()
     `),
 
+    /*
+     * TYPOGRAPHY COHERENCE, measured in the real renderer.
+     *
+     * Records the ACTUALLY RESOLVED typeface of every text element. Chromium
+     * reports the used font, so this catches a silent fallback that a
+     * stylesheet reading would not: if a family is missing, the computed
+     * font-family still reads back as the requested stack and the element
+     * quietly renders in something else. Also records any horizontal overflow
+     * per element, which is the risk when swapping a narrow proportional face
+     * for a wider monospaced one.
+     */
+    typography: await win.webContents.executeJavaScript(`
+      (() => {
+        const describe = (sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return null;
+          const cs = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          return {
+            selector: sel,
+            // The DECLARED stack, verbatim. This is NOT proof of what
+            // rendered: Chromium echoes the declared list back even when every
+            // family in it is missing. See effectiveTypeface below for the
+            // face actually rasterised.
+            declaredFontStack: cs.fontFamily,
+            weight: cs.fontWeight,
+            size: cs.fontSize,
+            letterSpacing: cs.letterSpacing,
+            textTransform: cs.textTransform,
+            width: Math.round(r.width),
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+            // Horizontal overflow introduced by the new face, if any.
+            overflowsX: el.scrollWidth > el.clientWidth + 1,
+            visible: r.width > 0 && r.height > 0,
+            text: (el.textContent || '').trim().slice(0, 40),
+          };
+        };
+        return {
+          elements: [
+            describe('.project-title'),
+            describe('.fraction'),
+            describe('.next-label'),
+            describe('.next-text'),
+            describe('.phase-name'),
+            describe('.phase-tally'),
+            describe('.phase-stamp'),
+            describe('.task-text'),
+            describe('.task.is-done .task-text'),
+            describe('.quest-count'),
+            describe('.status'),
+          ].filter(Boolean),
+        };
+      })()
+    `),
+
+    /*
+     * EFFECTIVE typeface, identified by measurement.
+     *
+     * The stack above names Courier Prime first because that is the PREFERRED
+     * face, but Courier Prime is not installed on this machine, so nothing
+     * actually renders in it. Computed style cannot reveal that: it just
+     * echoes the declared list back. This section identifies the face the
+     * rasteriser really used, by cloning each element and re-measuring it in
+     * one candidate family at a time. The candidate whose width matches the
+     * original within half a pixel is the effective font.
+     *
+     * If this ever reports two different families across elements, the widget
+     * has lost typographic coherence and the pass has failed.
+     */
+    effectiveTypeface: await win.webContents.executeJavaScript(`
+      (() => {
+        const CANDIDATES = ['Courier Prime', 'Courier New', 'Consolas', 'Constantia'];
+        const host = document.createElement('div');
+        host.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;';
+        document.body.appendChild(host);
+
+        const identify = (sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return null;
+          const cs = getComputedStyle(el);
+          const base = {
+            fontSize: cs.fontSize,
+            fontWeight: cs.fontWeight,
+            letterSpacing: cs.letterSpacing,
+            textTransform: cs.textTransform,
+            fontStyle: cs.fontStyle,
+          };
+          const text = (el.textContent || '').trim();
+          if (!text) return null;
+
+          /*
+           * Reference width, from a CLONE measured in exactly one way.
+           *
+           * Everything except the family must be held constant, and the only
+           * reliable way to guarantee that is to mutate ONE element and
+           * re-measure it. Two earlier attempts failed for instructive reasons:
+           *
+           * - Measuring the live element is wrong: its width is capped by its
+           *   container, so it reflects wrapping rather than the font.
+           * - Measuring a clone against separately-built probe spans is also
+           *   wrong: the clone inherits ancestor-dependent state rules, so in
+           *   the collapsed state it loses the state-specific title rule and
+           *   measures at 12px while the probes used 9px. That produced a
+           *   confident but false "unidentifiable" verdict.
+           *
+           * So: clone once, read its declared stack as the reference, then
+           * swap only font-family on that same clone. Same node, same size,
+           * same weight, same tracking, every time.
+           */
+          const clone = el.cloneNode(true);
+          clone.style.position = 'absolute';
+          clone.style.left = '-9999px';
+          clone.style.top = '0';
+          clone.style.visibility = 'hidden';
+          clone.style.width = 'auto';
+          clone.style.maxWidth = 'none';
+          clone.style.minWidth = '0';
+          clone.style.whiteSpace = 'pre';
+          clone.style.overflow = 'visible';
+          clone.style.textOverflow = 'clip';
+          host.appendChild(clone);
+
+          const readWidth = () =>
+            Math.round(clone.getBoundingClientRect().width * 100) / 100;
+
+          const declaredStack = getComputedStyle(clone).fontFamily;
+          const trueWidth = readWidth();
+          const scores = CANDIDATES.map((f) => {
+            clone.style.fontFamily = f;
+            return { family: f, width: readWidth() };
+          });
+          clone.style.fontFamily = declaredStack;
+          host.removeChild(clone);
+
+          const ranked = scores
+            .map((s) => ({ family: s.family, delta: Math.abs(s.width - trueWidth) }))
+            .sort((a, b) => a.delta - b.delta);
+          return {
+            selector: sel,
+            trueWidth,
+            effectiveFont: ranked[0].delta < 0.5 ? ranked[0].family : null,
+            ambiguous: ranked[0].delta >= 0.5,
+            ranked,
+          };
+        };
+
+        const out = [
+          identify('.project-title'),
+          identify('.phase-name'),
+          identify('.task-text'),
+          identify('.next-text'),
+          identify('.fraction'),
+          identify('.quest-count'),
+        ].filter(Boolean);
+        host.remove();
+        return {
+          elements: out,
+          distinctEffectiveFonts: [...new Set(out.map((o) => o.effectiveFont))],
+          anyAmbiguous: out.some((o) => o.ambiguous),
+          oneTypeface: new Set(out.map((o) => o.effectiveFont)).size === 1,
+        };
+      })()
+    `),
+
+    /*
+     * WRAPPING under the new, wider face.
+     *
+     * Courier New sets every glyph on the same advance, so it is wider than
+     * the proportional Constantia it replaced at the same nominal size. That
+     * is the one genuine risk of this pass: text that used to fit on a line
+     * may now wrap differently or clip. Measured in the EXPANDED state, where
+     * the title is 12px and has room to wrap across two lines, using a
+     * deliberately long title so the worst case is exercised rather than the
+     * happy path.
+     */
+    wrapping: await (async (): Promise<Record<string, unknown>> => {
+      applyGeometry(win, true);
+      config = { ...config, expanded: true };
+      pushState();
+      await new Promise((r) => setTimeout(r, 500));
+
+      const measure = () =>
+        win.webContents.executeJavaScript(`
+          (() => {
+            const t = document.querySelector('.project-title');
+            const pane = document.querySelector('.expanded');
+            const rows = Array.from(document.querySelectorAll('.task-text'));
+            const cs = t ? getComputedStyle(t) : null;
+            const lh = cs ? parseFloat(cs.lineHeight) : 0;
+            const tr = t ? t.getBoundingClientRect() : null;
+            return {
+              titleText: t ? t.textContent : null,
+              titleHeight: tr ? Math.round(tr.height) : null,
+              titleWidth: tr ? Math.round(tr.width) : null,
+              titleClientW: t ? t.clientWidth : null,
+              titleScrollW: t ? t.scrollWidth : null,
+              titleLines: lh && tr ? Math.round(tr.height / lh) : null,
+              titleOverflowsX: t ? t.scrollWidth > t.clientWidth + 1 : null,
+              titleTruncated: cs ? cs.textOverflow === 'ellipsis' : null,
+              viewportW: document.documentElement.clientWidth,
+              paneScrollW: pane ? pane.scrollWidth : null,
+              paneClientW: pane ? pane.clientWidth : null,
+              paneHorizontalOverflow: pane ? pane.scrollWidth > pane.clientWidth + 1 : null,
+              docHorizontalScroll:
+                document.documentElement.scrollWidth >
+                document.documentElement.clientWidth + 1,
+              anyTaskOverflowsX: rows.some((r) => r.scrollWidth > r.clientWidth + 1),
+              maxTaskHeight: rows.length
+                ? Math.max(...rows.map((r) => Math.round(r.getBoundingClientRect().height)))
+                : null,
+            };
+          })()
+        `) as Promise<Record<string, unknown>>;
+
+      const original = await measure();
+
+      // Worst case: a title far longer than any real one.
+      const titleEl = await win.webContents.executeJavaScript(
+        "document.querySelector('.project-title') ? document.querySelector('.project-title').textContent : ''",
+      ) as string;
+      await win.webContents.executeJavaScript(`
+        (() => {
+          const t = document.querySelector('.project-title');
+          if (t) t.textContent =
+            'SCRIPT NEW YOUTUBE VIDEO ON NOTEBOOKLM AND CLAUDE WITH A DELIBERATELY LONG PROJECT TITLE';
+        })()
+      `);
+      await new Promise((r) => setTimeout(r, 250));
+      const longTitle = await measure();
+
+      // Restore.
+      await win.webContents.executeJavaScript(
+        `(() => { const t = document.querySelector('.project-title'); if (t) t.textContent = ${JSON.stringify(titleEl)}; })()`,
+      );
+      await new Promise((r) => setTimeout(r, 200));
+
+      applyGeometry(win, false);
+      config = { ...config, expanded: false };
+      pushState();
+      await new Promise((r) => setTimeout(r, 400));
+
+      return {
+        original,
+        longTitle,
+        longTitleWrapsToMultipleLines:
+          typeof longTitle.titleLines === "number" && longTitle.titleLines >= 2,
+        longTitleClipped: longTitle.titleOverflowsX === true,
+        noHorizontalScrollAnywhere:
+          original.docHorizontalScroll === false &&
+          longTitle.docHorizontalScroll === false &&
+          original.paneHorizontalOverflow === false &&
+          longTitle.paneHorizontalOverflow === false,
+        noTaskOverflow: original.anyTaskOverflowsX === false,
+      };
+    })(),
+
+    /*
+     * NATIVE CAPTURES of both states, so the typography can be inspected as
+     * pixels rather than inferred from computed styles. Written next to the
+     * report; the app is a visible always-on-top window, so this is the real
+     * thing, not an offscreen approximation.
+     */
+    captures: await (async (): Promise<Record<string, unknown>> => {
+      const out: Record<string, unknown> = {};
+      const grab = async (name: string, expanded: boolean): Promise<void> => {
+        applyGeometry(win, expanded);
+        config = { ...config, expanded };
+        pushState();
+        await new Promise((r) => setTimeout(r, 700));
+        const image = await win.webContents.capturePage();
+        const file = `${SELFTEST_OUT.replace(/\.json$/, "")}-${name}.png`;
+        writeFileSync(file, image.toPNG());
+        out[name] = { file, size: image.getSize() };
+      };
+      await grab("collapsed", false);
+      await grab("expanded", true);
+      applyGeometry(win, false);
+      config = { ...config, expanded: false };
+      pushState();
+      await new Promise((r) => setTimeout(r, 400));
+      return out;
+    })(),
+
     errors: lastError,
     pollCount: poller?.pollCount ?? 0,
+
+    /*
+     * Autostart, read back from Electron rather than assumed.
+     *
+     * In an unpackaged development launch `packaged` is false and no login
+     * item exists by design. Against the INSTALLED application this reports
+     * openAtLogin true with the installed executable as the path, which is
+     * what proves startup does not point into WSL.
+     */
+    autostart: loginItemState(),
   };
 
   writeFileSync(SELFTEST_OUT, `${JSON.stringify(report, null, 2)}\n`, "utf8");
@@ -993,6 +1503,9 @@ app.whenReady().then(() => {
   mainWindow = createWindow();
   startPoller();
 
+  // Autostart is registered once the app is ready and only when packaged.
+  syncLoginItem();
+
   if (SELFTEST) {
     setTimeout(() => {
       runSelfTest().catch((err: unknown) => {
@@ -1009,6 +1522,56 @@ app.whenReady().then(() => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Windows autostart
+ * ------------------------------------------------------------------ */
+
+/**
+ * Start with Windows, using Electron's own login-item mechanism.
+ *
+ * Only meaningful for the PACKAGED application: Electron resolves the login
+ * item against the installed executable, so the startup target is the real
+ * installed app under Program Files / AppData, never the WSL source tree, a
+ * shell script, or `npm run dev`. In development `app.isPackaged` is false, so
+ * nothing is registered and the dev machine is left alone.
+ *
+ * `openAsHidden` is deliberately not used: the widget window is always-on-top
+ * and frameless, and it is restored to its saved position on show, so there is
+ * no console window to suppress and nothing to hide from the user.
+ */
+function syncLoginItem(): void {
+  if (!app.isPackaged) return;
+
+  try {
+    // Path must be the installed executable. Passing it explicitly is what
+    // pins the startup target to the packaged app rather than to whatever
+    // happened to be running when the setting was written.
+    const exePath = app.getPath("exe");
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      path: exePath,
+      args: [],
+    });
+    console.log(`autostart enabled -> ${exePath}`);
+  } catch (err) {
+    // A failed autostart must never stop the widget from running.
+    console.error("could not configure autostart:", err);
+  }
+}
+
+/** Current login-item state, for the diagnostics IPC and the self-test. */
+function loginItemState(): Record<string, unknown> {
+  try {
+    return {
+      packaged: app.isPackaged,
+      exePath: app.isPackaged ? app.getPath("exe") : null,
+      ...(app.isPackaged ? { settings: app.getLoginItemSettings() } : {}),
+    };
+  } catch (err) {
+    return { packaged: app.isPackaged, error: String(err) };
+  }
+}
 
 app.on("window-all-closed", () => {
   poller?.stop();

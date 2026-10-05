@@ -55,13 +55,18 @@ rmSync(STAGE_WSL, { recursive: true, force: true });
 mkdirSync(STAGE_WSL, { recursive: true });
 cpSync(dist, STAGE_WSL, { recursive: true });
 /*
- * NOTE: `"type": "module"` is deliberately NOT set here.
+ * NOTE: the staged package.json intentionally carries NO "type" field.
  *
- * With it present, Electron 44 fails to load shell/main.js at all: the app
- * exits 0 immediately with no output whatsoever, not even an error. Without
- * it, Node's syntax detection reparses main.js as an ES module (emitting a
- * harmless MODULE_TYPELESS_PACKAGE_JSON warning) and the app runs correctly.
- * That behaviour was confirmed by direct comparison.
+ * That was originally a workaround, added when Electron 44 appeared to exit
+ * silently with "type":"module" set. That claim was re-tested during the
+ * packaging pass and it is NOT true of this Electron version: both variants
+ * load dist/shell/main.js and reach app.whenReady() normally. The packaged
+ * application (built by electron-builder) does declare "type": "module",
+ * because that is what the repository's own package.json says, and it runs.
+ *
+ * The field is still omitted here so the development launch mirrors the
+ * structure electron-builder produces as closely as is convenient, without
+ * changing any behaviour. See README, Development.
  */
 writeFileSync(
   join(STAGE_WSL, "package.json"),
