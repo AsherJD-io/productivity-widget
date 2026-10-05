@@ -32,8 +32,12 @@
   --mustard-edge: #8d6330;
   --ink: #241a33;
   --ink-soft: #7d7059;
-  --green: #7d9a63;
-  --green-deep: #5d7346;
+  /* Completion green measured from the reference PNGs (#98af7b). The previous
+     #7d9a63 was invented; the spec calls for the source green. */
+  --green: #98af7b;
+  --green-deep: #7f9664;
+  --green-x: #3d6b32;
+  --sage-frame: #cfc4ad;
   --rule: #d5c8ae;
 
   /* Distinctive local stacks, no remote fonts. */
@@ -125,6 +129,26 @@ html, body {
   white-space: normal;
   overflow-wrap: break-word;
   hyphens: auto;
+}
+
+/*
+ * COLLAPSED title: one line.
+ *
+ * The collapsed paper is 191px wide with 8px padding either side, leaving
+ * about 175px. "YOUTUBE VIDEO EDITING TRACKER" is 27 characters, so the
+ * expanded title's 11px / 0.10em tracking cannot fit and wrapped to two lines.
+ *
+ * State-specific only. The expanded title keeps its measured two-line
+ * composition (ink 250px then 176px, 17px baseline gap) untouched.
+ */
+.shell:not(.is-expanded) .project-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 8.5px;
+  letter-spacing: 0.02em;
+  line-height: 12px;
+  max-width: 100%;
 }
 
 /* ---------- progress ---------- */
@@ -262,23 +286,34 @@ html, body {
   pointer-events: none;
 }
 
+/*
+ * PHASE COMPLETE, measured from the reference: a long shallow rectangle about
+ * 6:1, square corners (not a pill), a thin double gold rule with faded
+ * semi-transparent ochre ink, tilted ~8 degrees counter-clockwise.
+ *
+ * Placement stays in normal flow inside .phase-stamp-row, directly below the
+ * heading, because a8fd565 found the absolutely positioned version clipped
+ * against the paper and lost its top edge.
+ */
 .phase-stamp {
   flex: 0 0 auto;
   font-family: var(--typewriter);
-  font-size: 7px;
+  font-size: 6.5px;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  line-height: 1.6;
+  letter-spacing: 0.16em;
+  line-height: 1.45;
   text-transform: uppercase;
   white-space: nowrap;
 
-  color: var(--plum);
-  background: var(--mustard-lit);
+  color: var(--mustard-edge);
+  background: rgba(202, 152, 81, 0.16);
   border: 1px solid var(--mustard-edge);
-  padding: 1px 8px;
+  outline: 1px solid rgba(141, 99, 48, 0.3);
+  outline-offset: 1px;
+  padding: 1px 5px;
 
-  transform: rotate(-3deg);
-  box-shadow: 1px 1px 0 rgba(35, 21, 49, 0.25);
+  transform: rotate(-8deg);
+  box-shadow: 1px 1px 0 rgba(35, 21, 49, 0.18);
   pointer-events: none;
 }
 
@@ -305,16 +340,22 @@ html, body {
   -webkit-appearance: none;
   position: relative;
   flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
+  /* Measured in the reference: a ~15px square with a ~2px pale sage frame,
+     square corners, cream interior when unchecked. */
+  width: 15px;
+  height: 15px;
   margin: 1px 0 0 2px;
   padding: 0;
   cursor: pointer;
   background: var(--cream);
-  border: 1.5px solid var(--ink);
+  border: 2px solid var(--sage-frame);
   border-radius: 0;
 }
 
+/*
+ * ::before is the clickable hit-area expander, kept above the glyphs so the
+ * whole padded area stays clickable while the strokes draw underneath it.
+ */
 .task-box::before {
   content: "";
   position: absolute;
@@ -322,27 +363,49 @@ html, body {
   right: -5px;
   top: -5px;
   bottom: -5px;
+  z-index: 2;
 }
 
 .task.is-done .task-box {
   background: var(--green);
-  border-color: var(--green-deep);
+  border-color: var(--sage-frame);
 }
 
+/*
+ * The completion mark in the reference is an X, not a checkmark: a chunky
+ * dark-forest-green X filling most of the square. Drawn as painted bars rather
+ * than a rotated border corner, which is what a tick needs, so the glyph cannot
+ * drift back into a check shape at other sizes.
+ */
 .task-box::after {
   content: "";
   position: absolute;
-  left: 3px;
-  top: 0.5px;
-  width: 4px;
-  height: 7px;
-  border-right: 1.5px solid var(--plum);
-  border-bottom: 1.5px solid var(--plum);
-  transform: rotate(40deg) scale(0);
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 2px;
+  margin: -1px 0 0 -4px;
+  z-index: 1;
+  background: var(--green-x);
+  transform: rotate(45deg) scale(0);
   transition: transform 90ms ease;
 }
 
-.task.is-done .task-box::after { transform: rotate(40deg) scale(1); }
+.task.is-done .task-box::after {
+  transform: rotate(45deg) scale(1);
+}
+.task.is-done .task-box::before {
+  left: 50%;
+  right: auto;
+  top: 50%;
+  bottom: auto;
+  width: 8px;
+  height: 2px;
+  margin: -1px 0 0 -4px;
+  z-index: 1;
+  background: var(--green-x);
+  transform: rotate(-45deg) scale(1);
+}
 
 .task-text {
   flex: 1;
@@ -363,16 +426,36 @@ html, body {
 
 /* ---------- toothed transition ---------- */
 
+/*
+ * The sawtooth along the cream paper's lower edge, where it meets the casing
+ * immediately above the gold tray. Two 45deg gradients tiled at 16px produce
+ * the alternating plum teeth; no images and no extra elements needed.
+ *
+ * The previous version was height:0 when collapsed, i.e. present in the DOM but
+ * rendering nothing, and used a 135deg repeating gradient when expanded, which
+ * reads as diagonal hatching rather than as teeth.
+ */
+/*
+ * The plum reveal band between the cream paper's lower edge and the gold tray.
+ *
+ * Measured from the reference PNGs, not inferred: collapsed runs y87..y95
+ * (about 7-8px) and expanded y505..y517 (about 13px), each a flat band whose
+ * only variation is two counts in one channel (e.g. #3a2960 vs #3a2962). There
+ * are no teeth, no notches and no serrations.
+ *
+ * An earlier pass added a 45deg gradient pair and then a repeating SVG
+ * triangle mask here, on the belief that this edge was a sawtooth. Measurement
+ * does not support that, so it is a plain band.
+ */
 .teeth {
   flex: 0 0 auto;
-  height: 0;
+  height: 8px;
+  margin: 0 var(--case-x);
   background: var(--plum);
-  overflow: hidden;
 }
 
 .shell.is-expanded .teeth {
-  height: 20px;
-  background: repeating-linear-gradient(135deg, var(--plum) 0 5px, var(--plum-deep) 5px 10px);
+  height: 12px;
 }
 
 /* ---------- gold bottom assembly: source-relative size, not shrunk ---------- */

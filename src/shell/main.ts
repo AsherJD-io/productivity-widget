@@ -828,6 +828,12 @@ async function runSelfTest(): Promise<void> {
           next: q('#next-task')?.textContent ?? null,
           quest: q('#quest-count')?.textContent ?? null,
           phaseCount: q('#phase-count')?.textContent ?? null,
+          // Line count and fit, to prove the collapsed title is one line and
+          // is not being ellipsis-truncated.
+          titleHeight: (() => { const t = q('.project-title'); return t ? Math.round(t.getBoundingClientRect().height) : null; })(),
+          titleClientW: (() => { const t = q('.project-title'); return t ? t.clientWidth : null; })(),
+          titleScrollW: (() => { const t = q('.project-title'); return t ? t.scrollWidth : null; })(),
+          titleTruncated: (() => { const t = q('.project-title'); return t ? t.scrollWidth > t.clientWidth + 1 : null; })(),
           bridgePresent: typeof window.widget === 'object',
           frameWidth: q('#shell')?.getBoundingClientRect().width ?? null,
           frameHeight: q('#shell')?.getBoundingClientRect().height ?? null,
