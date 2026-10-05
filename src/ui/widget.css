@@ -41,14 +41,27 @@
   --rule: #d5c8ae;
 
   /* Distinctive local stacks, no remote fonts. */
-  --display: Rockwell, "Rockwell Nova", "Palatino Linotype", Palatino, Georgia, "Book Antiqua", serif;
-  --typewriter: "Courier New", "Nimbus Mono PS", Courier, Georgia, serif;
+  --display: Rockwell, "Rockwell Nova", "Bookman Old Style", "URW Bookman", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --typewriter: "Courier New", "Nimbus Mono PS", "Liberation Mono", Courier, "Book Antiqua", Georgia, serif;
   --mono: "Courier New", "Nimbus Mono PS", Courier, monospace;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/*
+ * The viewport must have a DEFINITE height.
+ *
+ * An earlier rewrite dropped height:100% here. Without it, .shell{height:100%}
+ * had no definite parent to resolve against, so the flex column grew to fit
+ * its content: with 51 fixture tasks the task region measured 1285px inside a
+ * 604px window and the tray sat at y1380, off-screen. Nothing scrolled,
+ * because there was no bounded box to scroll inside.
+ *
+ * height:100% here is what makes .expanded a real scroll container.
+ */
 html, body {
+  width: 100%;
+  height: 100%;
   background: transparent;
   overflow: hidden;
   user-select: none;
@@ -58,27 +71,47 @@ html, body {
 
 /* ---------- outer case ---------- */
 
+/*
+ * Casing.
+ *
+ * Earlier I read 25/50px side casing straight off the PNGs. That measurement
+ * was wrong: the classifier could not separate the plum casing from the drop
+ * shadow around it, so the shadow got reproduced AS casing and the widget read
+ * as a giant purple frame. The real casing is a thin plum border; the depth
+ * comes from the shadow below.
+ */
 .shell {
-  --case-x: 25px;
-  --case-top: 16px;
-  --tray-inset: 21px;
-  --tray-h: 26px;
-  --below-tray: 32px;
+  --case-x: 10px;
+  --case-top: 9px;
+  --tray-inset: 14px;
+  --tray-h: 26px;      /* unchanged */
+  --below-tray: 14px;
+  --dot: 5px;
+  --dot-gap: 4px;
 
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
+  max-height: 100%;
+  min-height: 0;
   background: var(--plum);
   overflow: hidden;
 }
 
 .shell.is-expanded {
-  --case-x: 50px;
-  --case-top: 33px;
-  --tray-inset: 43px;
-  --tray-h: 43px;
-  --below-tray: 43px;
+  --case-x: 14px;
+  --case-top: 12px;
+  --tray-inset: 22px;
+  --tray-h: 43px;      /* unchanged */
+  --below-tray: 18px;
+  --dot: 7px;
+  --dot-gap: 6px;
+}
+
+/* Depth from a shadow, not from a fat plum border. */
+.shell {
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
 }
 
 /* ---------- inner paper ---------- */
@@ -161,17 +194,29 @@ html, body {
   -webkit-app-region: no-drag;
 }
 
+/*
+ * Cylindrical progress bar.
+ *
+ * The source tapers: green runs 96px on the first row, 97px in the middle
+ * and 90px on the last (collapsed); 147/158/151 expanded. Narrowest at the
+ * top and bottom rows, widest through the middle - a pill, not a rectangle.
+ */
 .progress-track {
   flex: 1;
-  height: 5px;
-  background: #d9cdb4;
+  height: 7px;
+  background: #ddd2ba;
   border: 1px solid var(--mustard-edge);
+  border-radius: 999px;
   overflow: hidden;
 }
 
-.shell.is-expanded .progress-track { height: 8px; }
+.shell.is-expanded .progress-track { height: 10px; }
 
-.progress-fill { height: 100%; background: var(--green); }
+.progress-fill {
+  height: 100%;
+  background: var(--green);
+  border-radius: 999px;
+}
 
 .fraction {
   flex: 0 0 auto;
@@ -222,6 +267,7 @@ html, body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   margin-top: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--mustard-edge) var(--cream-shade);
@@ -231,9 +277,6 @@ html, body {
 .expanded::-webkit-scrollbar { width: 5px; }
 .expanded::-webkit-scrollbar-track { background: var(--cream-shade); }
 .expanded::-webkit-scrollbar-thumb { background: var(--mustard-edge); }
-
-/* `visible` on the x axis so the rotated stamp is never clipped sideways. */
-.expanded { overflow-x: visible; }
 
 .phase {
   margin-bottom: 4px;
@@ -481,16 +524,20 @@ html, body {
   -webkit-app-region: no-drag;
 }
 
+/*
+ * Three-dot motif. Measured in the source: 5px diameter at x28/37/46
+ * (pitch ~9px) in the collapsed tray, 7-8px at x53/66/80 (pitch ~13px) in
+ * the expanded tray. Previously 4px, which was too small.
+ */
 .dot {
-  width: 4px;
-  height: 4px;
+  width: var(--dot);
+  height: var(--dot);
   border-radius: 50%;
-  border: 1px solid var(--plum);
   background: var(--plum);
-  opacity: 0.85;
+  opacity: 0.88;
 }
-.dot-b { opacity: 0.6; }
-.dot-c { opacity: 0.4; }
+.dot-b { opacity: 0.62; }
+.dot-c { opacity: 0.42; }
 
 .quest-count {
   flex: 1;
@@ -554,6 +601,70 @@ html, body {
   flex: 1 1 auto;
   min-height: var(--below-tray);
   background: var(--plum);
+}
+
+/* ---------- content wrapping ---------- */
+
+/*
+ * Every text element wraps inside its box. Long task text must never create
+ * horizontal overflow or push the pane wider; the overflow is reached by
+ * vertical scroll instead.
+ *
+ * Compact controls (title, phase names, fraction, quest count, stamps) keep
+ * their own nowrap/ellipsis rules and are deliberately NOT included here.
+ */
+.next-text,
+.task-text,
+.empty,
+.notice {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.phase {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task,
+.task > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ---------- expand/collapse control: printed instrument, not a default button ---------- */
+
+.tray-toggle {
+  width: 16px;
+  height: 16px;
+  background: var(--cream);
+  border: 1.5px solid var(--plum);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px rgba(243, 233, 218, 0.9);
+  cursor: pointer;
+  position: relative;
+}
+
+.tray-toggle:hover {
+  background: var(--mustard-lit);
+  box-shadow: inset 0 0 0 1.5px rgba(243, 233, 218, 0.9), 0 1px 0 rgba(35, 21, 49, 0.3);
+}
+
+.tray-toggle:active {
+  transform: translateY(0.5px);
+  box-shadow: inset 0 1px 2px rgba(35, 21, 49, 0.35);
+}
+
+/* The chevron is drawn as a printed mark inside the ring. */
+.chevron {
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4.5px solid var(--plum);
+  margin-top: 2.5px;
+  transition: transform 110ms ease;
 }
 
 /* ---------- empty / error ---------- */

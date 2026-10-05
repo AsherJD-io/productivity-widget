@@ -12,7 +12,8 @@
  * plain `node` in WSL and under Electron here.
  */
 import { app, BrowserWindow, ipcMain, screen, shell } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -708,7 +709,90 @@ async function runSelfTest(): Promise<void> {
   pushState();
   await new Promise((r) => setTimeout(r, 400));
 
+  /*
+   * OVERFLOW TEST using a temporary fixture note.
+   *
+   * The fixture is written to the OS temp directory, never the user's vault,
+   * and is deleted afterwards. It exists to prove that overflowing task
+   * content scrolls vertically without widening or heightening the pane.
+   */
+  const fixtureRoot = join(tmpdir(), "widget-overflow-fixture");
+  const fixtureRel = "Overflow Fixture.md";
+  const fixtureFull = join(fixtureRoot, fixtureRel);
+  mkdirSync(fixtureRoot, { recursive: true });
+
+  const longTask =
+    "Verify the inverter firmware revision matches the commissioning checklist exactly";
+  const fixtureBody = [
+    "---",
+    "project: Overflow Fixture",
+    "---",
+    "",
+    "# Overflow Fixture",
+    "",
+    "## Phase One",
+    ...Array.from({ length: 40 }, (_, i) => `- [ ] Task number ${i + 1} ${longTask} ^ov-${i + 1}`),
+    "",
+    "## Phase Two",
+    "- [x] A completed task with a deliberately long descriptive label ^ov-done",
+    ...Array.from({ length: 10 }, (_, i) => `- [ ] Short ${i + 1} ^ov-b-${i + 1}`),
+    "",
+  ].join("\n");
+  writeFileSync(fixtureFull, fixtureBody, "utf8");
+
+  config = { ...config, vaultRoot: fixtureRoot, notePath: fixtureRel, expanded: true };
+  applyGeometry(win, true);
+  poller?.stop();
+  startPoller();
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const boundsBeforeOverflow = { ...win.getBounds() };
+  const overflowDom = await win.webContents.executeJavaScript(`
+    (() => {
+      const q = (s) => document.querySelector(s);
+      const pane = q('.expanded');
+      const cs = getComputedStyle(pane);
+      return {
+        taskRows: document.querySelectorAll('.task').length,
+        overflowY: cs.overflowY,
+        overflowX: cs.overflowX,
+        verticallyScrollable: pane.scrollHeight > pane.clientHeight,
+        horizontalOverflow: pane.scrollWidth > pane.clientWidth + 1,
+        clientW: pane.clientWidth,
+        scrollW: pane.scrollWidth,
+        clientH: pane.clientHeight,
+        scrollH: pane.scrollHeight,
+        trayTop: Math.round(q('.tray').getBoundingClientRect().top),
+        trayHeight: Math.round(q('.tray').getBoundingClientRect().height),
+        titleTop: Math.round(q('.project-title').getBoundingClientRect().top),
+        longestTaskWrapped: (() => {
+          const rows = Array.from(document.querySelectorAll('.task-text'));
+          const tallest = rows.reduce((a, b) => (b.getBoundingClientRect().height > a.getBoundingClientRect().height ? b : a), rows[0]);
+          return tallest ? Math.round(tallest.getBoundingClientRect().height) : null;
+        })(),
+      };
+    })()
+  `);
+  const boundsAfterOverflow = { ...win.getBounds() };
+
+  // Restore the real note and remove the fixture.
+  config = { ...config, vaultRoot: DEFAULT_VAULT_ROOT, notePath: DEFAULT_NOTE, expanded: false };
+  applyGeometry(win, false);
+  poller?.stop();
+  startPoller();
+  rmSync(fixtureRoot, { recursive: true, force: true });
+  await new Promise((r) => setTimeout(r, 600));
+
   const report = {
+    overflowTest: {
+      fixtureRemoved: !existsSync(fixtureRoot),
+      boundsBefore: boundsBeforeOverflow,
+      boundsAfter: boundsAfterOverflow,
+      heightUnchanged:
+        boundsBeforeOverflow.height === boundsAfterOverflow.height,
+      widthUnchanged: boundsBeforeOverflow.width === boundsAfterOverflow.width,
+      ...overflowDom,
+    },
     taskClick: clickResult,
     electron: process.versions.electron,
     chrome: process.versions.chrome,
