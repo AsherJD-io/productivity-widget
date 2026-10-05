@@ -69,9 +69,8 @@ const el = <T extends HTMLElement>(id: string): T => {
   return node as T;
 };
 
-const frame = el<HTMLDivElement>("frame");
+const shell = el<HTMLDivElement>("shell");
 const projectTitle = el<HTMLHeadingElement>("project-title");
-const phaseCount = el<HTMLSpanElement>("phase-count");
 const fraction = el<HTMLSpanElement>("fraction");
 const progressFill = el<HTMLDivElement>("progress-fill");
 const nextTask = el<HTMLSpanElement>("next-task");
@@ -89,11 +88,10 @@ let current: WidgetPayload | null = null;
 
 function renderEmpty(payload: WidgetPayload): void {
   projectTitle.textContent = "No project";
-  phaseCount.textContent = "0 phases";
   fraction.textContent = "0/0";
   progressFill.style.width = "0%";
   nextTask.textContent = "—";
-  questCount.textContent = "0 remaining";
+  questCount.textContent = "0/0 quests";
   expandedPane.hidden = true;
 
   const box = document.createElement("div");
@@ -112,7 +110,7 @@ function render(payload: WidgetPayload): void {
   current = payload;
   const state = payload.state;
 
-  frame.classList.toggle("is-expanded", payload.expanded);
+  shell.classList.toggle("is-expanded", payload.expanded);
   expandedPane.hidden = !payload.expanded;
 
   if (!state) {
@@ -125,13 +123,11 @@ function render(payload: WidgetPayload): void {
   // Progress comes from the domain core. Nothing here recomputes it.
   fraction.textContent = state.fraction;
   progressFill.style.width = `${state.percent}%`;
-  phaseCount.textContent = `${state.phaseCount} phase${state.phaseCount === 1 ? "" : "s"}`;
 
   nextTask.textContent = state.nextTask ? state.nextTask.text : "All tasks complete";
-  questCount.textContent =
-    state.total - state.completed === 0
-      ? `${state.total} done`
-      : `${state.total - state.completed} remaining`;
+  // The tray carries the quest fraction in the reference ("4/6 quests"), not a
+  // remaining-count, so the centre of the tray matches the source.
+  questCount.textContent = `${state.completed}/${state.total} quests`;
 
   if (payload.error) {
     status.textContent = shortError(payload.error);
@@ -224,12 +220,13 @@ function escapeHtml(value: string): string {
 /* ------------------------------------------------------------------ *
  * Dragging
  *
- * The title bar is the drag handle. Interactive children opt out with
- * .no-drag so a click never turns into a drag.
+ * The paper head is the drag handle. Interactive children opt out with
+ * .no-drag so a click never turns into a drag. There is no dark header bar in
+ * the reference, so the handle is the cream title area.
  * ------------------------------------------------------------------ */
 
 function installDrag(): void {
-  const handle = document.querySelector<HTMLElement>(".titlebar");
+  const handle = document.querySelector<HTMLElement>(".paper-head");
   if (!handle) return;
 
   let dragging = false;
@@ -272,7 +269,7 @@ expandToggle.addEventListener("click", () => {
   void window.widget.toggleExpand();
 });
 
-// Right-click the footer is a convenient "open the note" affordance.
+// Right-clicking the tray's quest count opens the note.
 el<HTMLElement>("quest-count").addEventListener("contextmenu", (e) => {
   e.preventDefault();
   void window.widget.revealNote();

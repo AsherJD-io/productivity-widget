@@ -95,17 +95,15 @@ let config: WidgetConfig = loadConfig();
  * additive growth: every toggle sets the window to one of these two fixed
  * bounds, anchored on the current top-left so the widget does not jump.
  *
- * COMPACT is the collapsed floating widget. EXPANDED is tall enough for the
- * phase and task list to scroll inside it, and is deliberately capped so the
- * widget never approaches full screen and the desktop stays visible.
- *
- * These supersede the raw screenshot pixel sizes (238x155 / 398x605). The
- * reference proportions are kept - compact is short and wide, expanded is
- * the same width and taller - but the compact width is wide enough for a
- * real project title and task text at normal Windows display scaling.
+ * COMPACT and EXPANDED are the reference screenshot sizes: 238x155 collapsed
+ * and 398x605 expanded. The screenshots are the specification. An earlier
+ * revision widened both to 480px on the argument that a wider box suits real
+ * project titles; that changed the design rather than scaling it, so it is
+ * reverted here. The two states differ in WIDTH as well as height, so the
+ * compact box is not a cropped version of the expanded one.
  */
-const COMPACT = { width: 480, height: 152 } as const;
-const EXPANDED = { width: 480, height: 560 } as const;
+const COMPACT = { width: 238, height: 155 } as const;
+const EXPANDED = { width: 398, height: 605 } as const;
 
 type Geometry = { width: number; height: number };
 
@@ -154,6 +152,13 @@ function createWindow(): BrowserWindow {
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
+    /*
+     * thickFrame:false removes the invisible resize border Windows otherwise
+     * keeps on a frameless window. Without it the OS reserves 1px on each
+     * edge, so a requested 238x155 measured 240x157 and the widget never sat
+     * exactly on its reference geometry.
+     */
+    thickFrame: false,
     resizable: false,
     maximizable: false,
     minimizable: false,
@@ -426,6 +431,19 @@ const SELFTEST_FLAG = "--selftest-out";
 const SELFTEST_OUT =
   process.argv[process.argv.indexOf(SELFTEST_FLAG) + 1] ?? "selftest.json";
 
+/*
+ * Self-test only: temporarily point the widget at a different note so the
+ * expanded layout can be verified against a real file without editing the
+ * user's saved configuration. Never persisted.
+ */
+const SELFTEST_NOTE_FLAG = "--selftest-note";
+if (SELFTEST) {
+  const override = process.argv[process.argv.indexOf(SELFTEST_NOTE_FLAG) + 1];
+  if (override !== undefined && !override.startsWith("--")) {
+    config = { ...config, notePath: override, expanded: false };
+  }
+}
+
 async function runSelfTest(): Promise<void> {
   const win = mainWindow;
   if (!win) throw new Error("no window");
@@ -473,6 +491,51 @@ async function runSelfTest(): Promise<void> {
   startPoller();
   await new Promise((r) => setTimeout(r, 500));
 
+  /*
+   * Measure the EXPANDED layout as well. The report below is taken in the
+   * collapsed state, where the phase list is hidden, so the expanded
+   * structure has to be sampled separately.
+   */
+  applyGeometry(win, true);
+  config = { ...config, expanded: true };
+  pushState();
+  await new Promise((r) => setTimeout(r, 700));
+
+  const expandedDom = await win.webContents.executeJavaScript(`
+    (() => {
+      const q = (s) => document.querySelector(s);
+      const box = (s) => { const e = q(s); return e ? e.getBoundingClientRect() : null; };
+      const paper = box('.paper'), tray = box('.tray'), teeth = box('.teeth');
+      const done = q('.task.is-done .task-text');
+      return {
+        viewport: [document.documentElement.clientWidth, document.documentElement.clientHeight],
+        paper: paper ? { top: Math.round(paper.top), height: Math.round(paper.height) } : null,
+        teeth: teeth ? { height: Math.round(teeth.height) } : null,
+        tray: tray ? { top: Math.round(tray.top), height: Math.round(tray.height) } : null,
+        trayAtBottom: tray ? Math.abs(tray.bottom - document.documentElement.clientHeight) <= 2 : false,
+        phaseHeads: document.querySelectorAll('.phase-head').length,
+        taskRows: document.querySelectorAll('.task').length,
+        doneRows: document.querySelectorAll('.task.is-done').length,
+        phaseStamps: document.querySelectorAll('.phase-stamp').length,
+        stampText: q('.phase-stamp')?.textContent ?? null,
+        struckThrough: done ? getComputedStyle(done).textDecorationLine : null,
+        listScrolls: (() => { const e = q('.expanded'); return e ? e.scrollHeight > e.clientHeight : null; })(),
+        dots: document.querySelectorAll('.dot-motif .dot').length,
+        toggleIsCircle: (() => {
+          const t = q('.tray-toggle'); if (!t) return false;
+          const cs = getComputedStyle(t);
+          return cs.borderRadius.includes('50%');
+        })(),
+      };
+    })()
+  `);
+
+  // Return to compact so the reported resting state is the compact one.
+  applyGeometry(win, false);
+  config = { ...config, expanded: false };
+  pushState();
+  await new Promise((r) => setTimeout(r, 400));
+
   const report = {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
@@ -502,6 +565,9 @@ async function runSelfTest(): Promise<void> {
       matchesCompact: size[0] === COMPACT.width && size[1] === COMPACT.height,
       matchesExpanded: size[0] === EXPANDED.width && size[1] === EXPANDED.height,
     },
+
+    /* Expanded-state layout sample. */
+    expandedDom,
 
     /* Ten measured expand/collapse cycles: sizes and position. */
     cycles,
@@ -565,8 +631,40 @@ async function runSelfTest(): Promise<void> {
           quest: q('#quest-count')?.textContent ?? null,
           phaseCount: q('#phase-count')?.textContent ?? null,
           bridgePresent: typeof window.widget === 'object',
-          frameWidth: q('#frame')?.getBoundingClientRect().width ?? null,
-          frameHeight: q('#frame')?.getBoundingClientRect().height ?? null,
+          frameWidth: q('#shell')?.getBoundingClientRect().width ?? null,
+          frameHeight: q('#shell')?.getBoundingClientRect().height ?? null,
+          // Authoritative widget size: the page viewport, which excludes any
+          // invisible border the OS keeps around a frameless window.
+          viewportWidth: document.documentElement.clientWidth,
+          viewportHeight: document.documentElement.clientHeight,
+          devicePixelRatio: window.devicePixelRatio,
+          trayVisible: !!q('.tray'),
+          dots: document.querySelectorAll('.dot-motif .dot').length,
+          toggleIsCircle: (() => {
+            const t = q('.tray-toggle');
+            if (!t) return false;
+            const cs = getComputedStyle(t);
+            return cs.borderRadius === '50%' || cs.borderRadius.includes('50%');
+          })(),
+          teethHeight: (() => {
+            const t = q('.teeth');
+            return t ? t.getBoundingClientRect().height : null;
+          })(),
+          trayHeight: (() => {
+            const t = q('.tray');
+            return t ? t.getBoundingClientRect().height : null;
+          })(),
+          paperHeight: (() => {
+            const p = q('.paper');
+            return p ? p.getBoundingClientRect().height : null;
+          })(),
+          taskRows: document.querySelectorAll('.task').length,
+          phaseHeads: document.querySelectorAll('.phase-head').length,
+          phaseStamps: document.querySelectorAll('.phase-stamp').length,
+          struckThrough: (() => {
+            const done = document.querySelector('.task.is-done .task-text');
+            return done ? getComputedStyle(done).textDecorationLine : null;
+          })(),
           bodyBg: getComputedStyle(document.body).backgroundColor,
         };
       })()

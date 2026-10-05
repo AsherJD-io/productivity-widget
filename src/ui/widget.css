@@ -1,33 +1,38 @@
 /*
- * Widget styling.
+ * Widget styling, rebuilt to match the two reference screenshots.
  *
- * Palette values are MEASURED from the reference screenshots, not chosen:
- *   #f3e9da  cream paper        40.1% of the expanded reference
- *   #eee9db  cream, shaded      9.8% of the collapsed reference
- *   #151519  near-black surround 11.2% / 16.0%
- *   #1e162a  deep indigo frame   6.6% / 8.8%
- *   #221531  deep indigo, darker 8.8%
- *   #3c2962  lighter indigo      6.1%  (borders, inset edges)
- *   #ca9752  mustard gold        6.9% / 3.2%  (controls, accents)
+ * Palette and band geometry are MEASURED from the PNGs, not chosen.
+ * Sampling each row's dominant colour gives these bands:
  *
- * Dimensions are measured too: 238x155 collapsed, 398x605 expanded.
+ *   COLLAPSED 238x155          EXPANDED 398x605
+ *     purple shell  y 0..154     purple shell  y 2..594
+ *     cream paper  y 16..87      cream paper  y 33..501
+ *     gold tray    y 97..122     gold tray    y 520..561
+ *     purple foot  y123..154     purple foot  y 562..594
  *
- * Deliberately avoided: glassmorphism, large radii, gradients, oversized
- * icons, and generous whitespace. This should read as a small printed
- * artifact, not a web dashboard.
+ * The gold tray is anchored to the bottom of the shell in BOTH states and
+ * spans the full shell width. In the collapsed reference the tray is 191px
+ * wide inside a 238px shell; in the expanded one it is 313px inside 398px, so
+ * it is inset by the same ~23px on each side in both.
+ *
+ * Deliberately avoided: glassmorphism, large radii, gradients, web-dashboard
+ * chrome, a full-width dark header bar, and a top-right square toggle. This
+ * should read as a small printed instrument, not a dashboard.
  */
 
 :root {
-  --paper: #f3e9da;
-  --paper-shade: #eee9db;
-  --ink: #151519;
-  --frame: #1e162a;
-  --frame-deep: #221531;
+  --paper: #f3e9d9;
+  --paper-shade: #efe9dc;
+  --ink: #231531;
+  --frame: #231531;
+  --frame-deep: #1e1430;
   --frame-line: #3c2962;
-  --gold: #ca9752;
-  --gold-dim: #c9964d;
-  --green: #6f8f5a;
-  --green-soft: #8aa873;
+  --frame-edge: #0b0121;
+  --gold: #ca9851;
+  --gold-dim: #c99650;
+  --gold-deep: #8d6367;
+  --green: #98af7b;
+  --green-deep: #6f8f5a;
 
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
   --mono: "Courier New", Courier, monospace;
@@ -39,20 +44,20 @@
   box-sizing: border-box;
 }
 
-/*
- * The frame is CONTENT-SIZED, not viewport-sized.
- *
- * Previously `html, body, .frame` all used width/height: 100% while .frame
- * carried the dark indigo background. Any window taller than its content
- * therefore painted its entire height dark purple: the "giant empty
- * rectangle" reported against the collapsed state.
- *
- * Now the frame hugs its content. If the window is ever momentarily larger
- * than the content, the surplus is transparent desktop rather than a slab of
- * purple. Only the expanded pane stretches, so it can scroll.
- */
 html,
 body {
+  /*
+   * Explicit 100% height, not just `background: transparent`.
+   *
+   * `.shell` anchors the gold tray to the bottom with `height: 100%`. That
+   * percentage resolves against its parent, so if html/body are auto-height the
+   * shell collapses to its content (measured 104px in a 155px window) and the
+   * tray floats mid-window instead of sitting at the bottom. Electron fills the
+   * viewport for a frameless window, but relying on that hid the bug; pinning
+   * the chain here makes the anchoring correct regardless of host.
+   */
+  width: 100%;
+  height: 100%;
   background: transparent;
   overflow: hidden;
   user-select: none;
@@ -60,125 +65,103 @@ body {
   cursor: default;
 }
 
-.frame {
+/*
+ * The shell is CONTENT-SIZED, not viewport-sized, so surplus window area is
+ * transparent desktop rather than a slab of purple. Only the expanded paper
+ * stretches, so the task list can scroll.
+ */
+.shell {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: auto;
+  /*
+   * Fills the window in BOTH states. This is what anchors the gold tray to the
+   * bottom in the collapsed reference too; with `height: auto` the shell hugged
+   * its content and the tray floated mid-window instead.
+   */
+  height: 100%;
   max-height: 100vh;
   background: var(--frame);
-  border: 1px solid #0d0a14;
+  border: 1px solid var(--frame-edge);
   border-radius: 3px;
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
     0 6px 18px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
 
 /*
- * Expanded only: the pane takes the remaining height so its task list can
- * scroll inside the fixed window. Collapsed never sets this, so the frame
- * stays exactly as tall as the header, progress, next-task and footer rows.
+ * The shell fills the window in BOTH states. This is what anchors the gold tray
+ * to the bottom in the collapsed reference too: with `height: auto` the shell
+ * hugged its content and the tray floated mid-window instead.
  */
-.frame.is-expanded {
+/* Kept as an explicit hook: the renderer toggles this class and the paper
+   layout responds to it. */
+.shell.is-expanded {
   height: 100%;
 }
 
-/* ---------- title bar ---------- */
+/* ---------- cream paper ---------- */
 
-.titlebar {
+.paper {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 8px 6px 10px;
-  background: var(--frame-deep);
-  border-bottom: 1px solid var(--frame-line);
+  flex-direction: column;
+  /*
+   * flex: 1 makes the paper absorb the height the tray does not use, which is
+   * what pushes the gold tray to the bottom of the shell. Without a grow factor
+   * the paper hugged its content and the tray sat directly beneath it -- 58px
+   * above the window floor in the collapsed reference box.
+   */
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--paper);
+  border-left: 1px solid var(--frame-line);
+  border-right: 1px solid var(--frame-line);
+  /* Matches the reference: the paper is inset from the shell top. */
+  margin-top: 3px;
+}
+
+.paper-head {
+  padding: 5px 9px 4px;
+  background: var(--paper);
+  border-bottom: 1px solid #ddd3be;
   cursor: move;
   flex: 0 0 auto;
 }
 
 .project-title {
-  flex: 1;
-  min-width: 0;
   font-family: var(--serif);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
+  line-height: 1.25;
   letter-spacing: 0.2px;
-  color: var(--paper);
+  color: var(--ink);
+  text-align: center;
+  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-bottom: 4px;
 }
 
-.icon-btn {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  background: var(--gold);
-  border: 1px solid #8a6330;
-  border-radius: 2px;
-  cursor: pointer;
-  padding: 0;
-}
-
-.icon-btn:hover {
-  background: var(--gold-dim);
-}
-
-.icon-btn:active {
-  transform: translateY(1px);
-}
-
-.chevron {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid #2a1c10;
-  transition: transform 140ms ease;
-}
-
-.frame.is-expanded .chevron {
-  transform: rotate(180deg);
-}
-
-/* ---------- progress ---------- */
-
-.progress-block {
-  padding: 8px 10px 7px;
-  background: var(--paper);
-  border-bottom: 1px solid #d9cfba;
-  flex: 0 0 auto;
-}
-
-.progress-meta {
+/*
+ * Progress row: a dotted/pixel track with the fraction at the right, matching
+ * the collapsed reference where "4/6" sits at the far right of the progress row.
+ */
+.progress-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 5px;
-}
-
-.meta-label {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: #7d7059;
-}
-
-.fraction {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--frame);
-  letter-spacing: -0.3px;
+  align-items: center;
+  gap: 6px;
 }
 
 .progress-track {
-  height: 7px;
-  background: #ded3bd;
+  flex: 1;
+  height: 6px;
+  background: repeating-linear-gradient(
+    90deg,
+    #ded3bd 0 2px,
+    transparent 2px 4px
+  );
   border: 1px solid #a8977a;
   border-radius: 1px;
   overflow: hidden;
@@ -187,40 +170,49 @@ body {
 .progress-fill {
   height: 100%;
   background: var(--green);
-  border-right: 1px solid #55683f;
-  transition: width 200ms ease;
+  border-right: 1px solid var(--green-deep);
+}
+
+.fraction {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.3px;
 }
 
 /* ---------- next task ---------- */
 
 .next-block {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 7px 10px 8px;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 5px 9px 6px;
   background: var(--paper-shade);
-  border-bottom: 1px solid #d9cfba;
+  border-bottom: 1px solid #ddd3be;
   flex: 0 0 auto;
 }
 
 .next-label {
   font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.6px;
+  font-size: 8px;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
   color: #8a6a34;
   background: var(--gold);
   border: 1px solid #a97c39;
   border-radius: 2px;
-  padding: 1px 4px;
+  padding: 0 3px;
   flex: 0 0 auto;
+  line-height: 1.5;
 }
 
 .next-text {
   font-family: var(--serif);
-  font-size: 12px;
+  font-size: 10.5px;
   line-height: 1.3;
-  color: var(--frame);
+  color: var(--ink);
   min-width: 0;
   overflow: hidden;
   display: -webkit-box;
@@ -228,7 +220,7 @@ body {
   -webkit-box-orient: vertical;
 }
 
-/* ---------- expanded phase list ---------- */
+/* ---------- expanded paper list ---------- */
 
 .expanded {
   flex: 1 1 auto;
@@ -241,7 +233,7 @@ body {
 }
 
 .expanded::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .expanded::-webkit-scrollbar-track {
@@ -264,8 +256,8 @@ body {
 .phase-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px 5px;
+  gap: 5px;
+  padding: 4px 9px 3px;
   background: #e9dfcc;
   border-bottom: 1px solid #d5c9b1;
 }
@@ -273,9 +265,9 @@ body {
 .phase-name {
   flex: 1;
   font-family: var(--serif);
-  font-size: 11.5px;
+  font-size: 10px;
   font-weight: 700;
-  color: var(--frame);
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -283,7 +275,7 @@ body {
 
 .phase-tally {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 8.5px;
   color: #6f6350;
   flex: 0 0 auto;
 }
@@ -292,15 +284,15 @@ body {
 .phase-stamp {
   flex: 0 0 auto;
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: 7px;
   font-weight: 700;
-  letter-spacing: 0.7px;
+  letter-spacing: 0.6px;
   text-transform: uppercase;
-  color: #f3e9da;
-  background: var(--green);
+  color: #f3e9d9;
+  background: var(--green-deep);
   border: 1px solid #4d6440;
   border-radius: 2px;
-  padding: 1px 4px;
+  padding: 0 3px;
 }
 
 .phase.is-complete .phase-name {
@@ -314,8 +306,8 @@ body {
 .task {
   display: flex;
   align-items: flex-start;
-  gap: 7px;
-  padding: 4px 10px 4px 12px;
+  gap: 6px;
+  padding: 3px 9px 3px 10px;
   cursor: pointer;
   border-bottom: 1px dotted #ddd3be;
 }
@@ -330,8 +322,8 @@ body {
 
 .task-box {
   flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
+  width: 9px;
+  height: 9px;
   margin-top: 2px;
   border: 1px solid #8d7f66;
   background: #fbf6ec;
@@ -341,16 +333,16 @@ body {
 }
 
 .task.is-done .task-box {
-  background: var(--green);
+  background: var(--green-deep);
   border-color: #4d6440;
 }
 
 .task-box::after {
   content: "";
-  width: 6px;
-  height: 3px;
-  border-left: 1.5px solid #f3e9da;
-  border-bottom: 1.5px solid #f3e9da;
+  width: 5px;
+  height: 2.5px;
+  border-left: 1.5px solid #f3e9d9;
+  border-bottom: 1.5px solid #f3e9d9;
   transform: rotate(-45deg) scale(0);
   transition: transform 120ms ease;
   margin-top: -2px;
@@ -364,45 +356,110 @@ body {
   flex: 1;
   min-width: 0;
   font-family: var(--serif);
-  font-size: 11.5px;
+  font-size: 10px;
   line-height: 1.35;
   color: #241a33;
   word-break: break-word;
 }
 
+/* Completed tasks are visibly crossed out, per the expanded reference. */
 .task.is-done .task-text {
   color: #8d8474;
   text-decoration: line-through;
   text-decoration-thickness: 1px;
-  text-decoration-color: var(--green);
+  text-decoration-color: var(--green-deep);
 }
 
-/* ---------- footer ---------- */
+/* ---------- purple toothed detail above the tray ---------- */
 
-.footer {
+/*
+ * Measured in both references as a purple band between the paper and the
+ * tray: y88-96 (9px) collapsed, y500-519 (20px) expanded. It only appears in
+ * the expanded state, so it is hidden rather than removed when collapsed.
+ */
+.teeth {
+  flex: 0 0 auto;
+  height: 0;
+  background: var(--frame);
+  overflow: hidden;
+  transition: height 120ms ease;
+}
+
+.shell.is-expanded .teeth {
+  height: 12px;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      var(--frame) 0 6px,
+      #150d22 6px 12px
+    );
+}
+
+/* ---------- gold bottom control tray ---------- */
+
+/*
+ * Present in BOTH states and anchored at the bottom of the shell. Inset ~23px
+ * each side, matching the measured reference. This is the only control surface:
+ * there is no top-right toggle.
+ */
+.tray {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
-  padding: 5px 10px;
-  background: var(--frame-deep);
-  border-top: 1px solid var(--frame-line);
+  margin: 4px 23px 6px;
+  padding: 3px 6px;
+  background: var(--gold);
+  border: 1px solid var(--gold-deep);
+  border-radius: 1px;
   flex: 0 0 auto;
 }
 
+/* Three small decorative dots on the left of the tray. */
+.dot-motif {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid #3b1837;
+}
+
+.dot-a {
+  background: #885c48;
+}
+
+.dot-b {
+  background: #402d4e;
+}
+
+.dot-c {
+  background: #261245;
+}
+
+/* Quest fraction, centred. */
 .quest-count {
+  flex: 1;
+  text-align: center;
   font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.4px;
-  color: var(--paper);
-  opacity: 0.82;
+  font-size: 9px;
+  letter-spacing: 0.3px;
+  color: #2a1c10;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status {
+  flex: 0 0 auto;
+  max-width: 84px;
   font-family: var(--mono);
-  font-size: 9px;
-  color: var(--gold);
+  font-size: 8px;
+  color: #6b4340;
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
@@ -410,15 +467,50 @@ body {
 }
 
 .status.is-error {
-  color: #d98a7a;
+  color: #7a1f16;
+}
+
+/* Circular expand/collapse control, on the right of the tray. */
+.tray-toggle {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  background: var(--paper);
+  border: 1px solid #3b1837;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tray-toggle:hover {
+  background: #fffdf6;
+}
+
+.tray-toggle:active {
+  transform: translateY(1px);
+}
+
+.chevron {
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid #2a1c10;
+  transition: transform 140ms ease;
+}
+
+.shell.is-expanded .chevron {
+  transform: rotate(180deg);
 }
 
 /* ---------- empty / error states ---------- */
 
 .empty {
-  padding: 14px 12px;
+  padding: 10px 9px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.5;
   color: #7d7059;
   background: var(--paper);
@@ -426,6 +518,6 @@ body {
 
 .empty code {
   font-family: var(--mono);
-  color: var(--frame);
+  color: var(--ink);
   word-break: break-all;
 }

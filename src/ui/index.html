@@ -4,47 +4,69 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self';"
+      content="default-src 'none'; style-src 'self'; script-src 'self';"
     />
     <title>Productivity Widget</title>
     <link rel="stylesheet" href="widget.css" />
   </head>
   <body>
     <!--
-      The whole widget is a drag surface EXCEPT elements marked .no-drag,
-      which are the interactive hit areas. This keeps dragging and clicking
-      from fighting each other.
+      Layout reproduced from the two reference screenshots, measured from the
+      PNGs themselves rather than invented:
+
+        collapsed 238 x 155   purple shell y0-15 | paper y16-87 |
+                              teeth y88-96 | GOLD TRAY y97-122
+        expanded  398 x 605   purple shell y0-32 | paper y33-499 |
+                              teeth y500-519 | GOLD TRAY y520-560
+
+      A horizontal slice of the tray shows three separate marks on the left
+      (x~43-52, 62-66, 75-79) and one isolated element far right (x~346-355):
+      the three-dot motif and the circular control.
+
+      The whole shell is a drag surface EXCEPT .no-drag elements, which are
+      the interactive hit areas, so dragging and clicking cannot fight.
     -->
-    <div id="frame" class="frame">
-      <header class="titlebar no-drag-off">
-        <h1 id="project-title" class="project-title">Loading</h1>
-        <button id="expand-toggle" class="icon-btn no-drag" title="Expand / collapse" aria-label="Expand or collapse">
+    <div id="shell" class="shell">
+      <div id="paper" class="paper">
+        <section class="paper-head">
+          <h1 id="project-title" class="project-title">Loading</h1>
+        </section>
+
+        <section class="progress-row">
+          <div class="progress-track" role="progressbar" aria-labelledby="fraction">
+            <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+          </div>
+          <span id="fraction" class="fraction">0/0</span>
+        </section>
+
+        <section class="next-block">
+          <span class="next-label">next</span>
+          <span id="next-task" class="next-text">&mdash;</span>
+        </section>
+
+        <section id="expanded" class="expanded" hidden>
+          <div id="phase-list" class="phase-list"></div>
+        </section>
+      </div>
+
+      <!-- Purple toothed detail above the tray; reference shows it expanded. -->
+      <div class="teeth" aria-hidden="true"></div>
+
+      <!-- Gold control tray. Present in BOTH states; never removed. -->
+      <footer class="tray">
+        <span class="dot-motif" aria-hidden="true">
+          <i class="dot dot-a"></i><i class="dot dot-b"></i><i class="dot dot-c"></i>
+        </span>
+        <span id="quest-count" class="quest-count">0/0 quests</span>
+        <span id="status" class="status"></span>
+        <button
+          id="expand-toggle"
+          class="tray-toggle no-drag"
+          title="Expand / collapse"
+          aria-label="Expand or collapse"
+        >
           <span id="chevron" class="chevron"></span>
         </button>
-      </header>
-
-      <section class="progress-block">
-        <div class="progress-meta">
-          <span id="phase-count" class="meta-label">0 phases</span>
-          <span id="fraction" class="fraction">0/0</span>
-        </div>
-        <div class="progress-track" role="progressbar" aria-labelledby="fraction">
-          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
-        </div>
-      </section>
-
-      <section class="next-block">
-        <span class="next-label">next</span>
-        <span id="next-task" class="next-text">&mdash;</span>
-      </section>
-
-      <section id="expanded" class="expanded" hidden>
-        <div id="phase-list" class="phase-list"></div>
-      </section>
-
-      <footer class="footer">
-        <span id="quest-count" class="quest-count">0 remaining</span>
-        <span id="status" class="status"></span>
       </footer>
     </div>
 
