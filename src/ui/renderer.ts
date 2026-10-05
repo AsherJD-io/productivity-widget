@@ -165,14 +165,23 @@ function renderPhases(state: DerivedState): void {
       head.append(tally);
     }
 
+    section.append(head);
+
+    /*
+     * The stamp lives in its own row directly BELOW the heading, which is
+     * where the source puts it (heading band y144-150, stamp y159-196).
+     * Previously it was absolutely positioned with a negative offset and was
+     * clipped by the paper, losing its top edge.
+     */
     if (phase.complete) {
+      const rowEl = document.createElement("div");
+      rowEl.className = "phase-stamp-row";
       const stamp = document.createElement("span");
       stamp.className = "phase-stamp";
       stamp.textContent = "Phase complete";
-      head.append(stamp);
+      rowEl.append(stamp);
+      section.append(rowEl);
     }
-
-    section.append(head);
 
     for (const task of phase.tasks) {
       const row = document.createElement("div");

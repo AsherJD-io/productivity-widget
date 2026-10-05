@@ -1,20 +1,22 @@
 /*
- * Presentation layer, rewritten against measurements taken from the two
- * source PNGs rather than layered with overrides.
+ * Presentation layer. One coherent model, no accumulated overrides.
  *
- *   COLLAPSED 238 x 155            EXPANDED 398 x 605
- *     paper inset 25 / 22 px         paper inset 50 / 48 px
- *     top casing 16 px               top casing 33 px
- *     paper rows 16..87 (72 px)      paper rows 33..498 (466 px)
- *     tray rows 97..122 (26 px)      tray rows 519..561 (43 px)
- *     tray inset 21 / 25 px          tray inset 43 / 42 px
- *     plum below tray 32 px          plum below tray 43 px
- *     progress fill 96 x 5 px        progress fill 156 x 8 px
- *     checkbox 4..5 px               checkbox 12-13 px, 18 px into paper
+ * Measured from Screenshot 2026-10-05 004441.png (expanded) and
+ * 004348.png (collapsed):
  *
- * The source contains NO large green region other than the progress fill and
- * the filled checkboxes. The phase-complete mark is therefore not a green
- * pill: it is a light paper/gold sticker with dark ink and a slight rotation.
+ *   window            398 x 605          238 x 155
+ *   paper             x 50..349 (300px)  x 25..215 (191px)
+ *   casing            L50 R48 T33        L25 R22 T16
+ *   paper height      463px              72px
+ *   plum below paper  109px              32px
+ *   title line 1      y47..54  ink x75..324 (250px)   <- TWO lines
+ *   title line 2      y64..71  ink x111..286 (176px)
+ *   title cap height  8px, baseline gap 17px, both centred on x199
+ *   phase heading     7px cap, e.g. y144..150
+ *   stamp             126 x 37 at x205..331, y159..196  <- BELOW the heading
+ *   tray              x43..354 (311px) x 43px
+ *   plum below tray   43px
+ *   checkbox          12-13px square, 18px into the paper
  *
  * Palette from the source: cream #f3e9da, plum #231531, indigo #3c2962,
  * mustard #ca9851. No gradients, no glass, no modern card shadow.
@@ -25,7 +27,6 @@
   --cream-shade: #ece2d0;
   --plum: #231531;
   --plum-deep: #1a0f26;
-  --indigo: #3c2962;
   --mustard: #ca9851;
   --mustard-lit: #d9a866;
   --mustard-edge: #8d6330;
@@ -33,10 +34,10 @@
   --ink-soft: #7d7059;
   --green: #7d9a63;
   --green-deep: #5d7346;
+  --rule: #d5c8ae;
 
-  /* Display serif: vintage print character. Local stack, no remote fonts. */
-  --display: Rockwell, "Rockwell Nova", "Palatino Linotype", Palatino, Georgia, serif;
-  /* Typewriter / literary for task bodies. */
+  /* Distinctive local stacks, no remote fonts. */
+  --display: Rockwell, "Rockwell Nova", "Palatino Linotype", Palatino, Georgia, "Book Antiqua", serif;
   --typewriter: "Courier New", "Nimbus Mono PS", Courier, Georgia, serif;
   --mono: "Courier New", "Nimbus Mono PS", Courier, monospace;
 }
@@ -81,9 +82,10 @@ html, body {
 .paper {
   flex: 0 0 auto;
   margin: var(--case-top) var(--case-x) 0;
-  padding: 4px 8px 5px;
+  padding: 4px 8px 4px;
   background: var(--cream);
   color: var(--ink);
+  overflow: visible;
   -webkit-app-region: drag;
   cursor: move;
 }
@@ -93,26 +95,36 @@ html, body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 6px 14px 6px;
+  padding: 6px 12px 4px;
 }
 
+/*
+ * Title. Two centred lines in the source, so it WRAPS.
+ * `nowrap` forced one long line and made the composition read too wide.
+ */
 .paper-head {
-  text-align: center;
-  margin-bottom: 4px;
   flex: 0 0 auto;
+  margin-bottom: 3px;
+  text-align: center;
+  -webkit-app-region: no-drag;
 }
 
 .project-title {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  margin: 0 auto;
   font-family: var(--display);
   font-size: 11px;
   font-weight: 700;
-  line-height: 1.15;
+  line-height: 17px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  text-align: center;
   color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
 }
 
 /* ---------- progress ---------- */
@@ -121,7 +133,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
   -webkit-app-region: no-drag;
 }
 
@@ -135,15 +147,12 @@ html, body {
 
 .shell.is-expanded .progress-track { height: 8px; }
 
-.progress-fill {
-  height: 100%;
-  background: var(--green);
-}
+.progress-fill { height: 100%; background: var(--green); }
 
 .fraction {
   flex: 0 0 auto;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
   color: var(--ink);
 }
@@ -173,8 +182,8 @@ html, body {
   flex: 1;
   min-width: 0;
   font-family: var(--typewriter);
-  font-size: 9.5px;
-  line-height: 1.3;
+  font-size: 9px;
+  line-height: 1.25;
   color: var(--ink);
   overflow: hidden;
   display: -webkit-box;
@@ -189,7 +198,7 @@ html, body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  margin-top: 5px;
+  margin-top: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--mustard-edge) var(--cream-shade);
   -webkit-app-region: no-drag;
@@ -199,9 +208,11 @@ html, body {
 .expanded::-webkit-scrollbar-track { background: var(--cream-shade); }
 .expanded::-webkit-scrollbar-thumb { background: var(--mustard-edge); }
 
+/* `visible` on the x axis so the rotated stamp is never clipped sideways. */
+.expanded { overflow-x: visible; }
+
 .phase {
-  position: relative;
-  margin-bottom: 5px;
+  margin-bottom: 4px;
   -webkit-app-region: no-drag;
 }
 
@@ -209,15 +220,15 @@ html, body {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  padding: 2px 0;
-  border-bottom: 1px solid #d5c8ae;
+  padding: 1px 0 2px;
+  border-bottom: 1px solid var(--rule);
 }
 
 .phase-name {
   flex: 1;
   min-width: 0;
   font-family: var(--typewriter);
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -230,33 +241,44 @@ html, body {
 .phase-tally {
   flex: 0 0 auto;
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: 7.5px;
   color: var(--ink-soft);
 }
 
 /*
- * PHASE COMPLETE
+ * PHASE COMPLETE.
  *
- * A light paper/gold sticker, dark ink, slightly rotated, overlapping the
- * top-right of the phase block. Deliberately not a green pill: the source
- * has no green region of this size.
+ * Measured: a warm 126 x 37 region at x205..331, y159..196 - BELOW the
+ * heading band (y144..150), right aligned, paper ends at x349.
+ *
+ * It sits in normal flow, not absolutely positioned with a negative offset,
+ * because the absolute version was clipped by the paper and lost its top.
+ * Not a green pill: the source has no green region of this size.
  */
+.phase-stamp-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 0 1px;
+  pointer-events: none;
+}
+
 .phase-stamp {
-  position: absolute;
-  top: -4px;
-  right: 2px;
-  z-index: 2;
+  flex: 0 0 auto;
   font-family: var(--typewriter);
-  font-size: 6.5px;
+  font-size: 7px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
+  line-height: 1.6;
   text-transform: uppercase;
+  white-space: nowrap;
+
   color: var(--plum);
   background: var(--mustard-lit);
   border: 1px solid var(--mustard-edge);
-  padding: 1px 4px;
-  transform: rotate(-4deg);
-  box-shadow: 1px 1px 0 rgba(35, 21, 49, 0.28);
+  padding: 1px 8px;
+
+  transform: rotate(-3deg);
+  box-shadow: 1px 1px 0 rgba(35, 21, 49, 0.25);
   pointer-events: none;
 }
 
@@ -268,7 +290,7 @@ html, body {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 1.5px 0;
+  padding: 1px 0;
   -webkit-app-region: no-drag;
   cursor: pointer;
 }
@@ -276,7 +298,7 @@ html, body {
 .task:hover { background: #efe6d4; }
 .task.is-locked { cursor: default; opacity: 0.7; }
 
-/* Printed checkbox: 12px square, with a wider invisible hit area. */
+/* Printed checkbox: 12px square with a wider invisible hit margin. */
 .task-box {
   -webkit-app-region: no-drag;
   appearance: none;
@@ -288,7 +310,7 @@ html, body {
   margin: 1px 0 0 2px;
   padding: 0;
   cursor: pointer;
-  background: transparent;
+  background: var(--cream);
   border: 1.5px solid var(--ink);
   border-radius: 0;
 }
@@ -326,8 +348,8 @@ html, body {
   flex: 1;
   min-width: 0;
   font-family: var(--typewriter);
-  font-size: 9.5px;
-  line-height: 1.4;
+  font-size: 9px;
+  line-height: 1.35;
   color: var(--ink);
   word-break: break-word;
 }
@@ -339,7 +361,7 @@ html, body {
   text-decoration-color: var(--green-deep);
 }
 
-/* ---------- toothed transition above the tray ---------- */
+/* ---------- toothed transition ---------- */
 
 .teeth {
   flex: 0 0 auto;
@@ -353,7 +375,7 @@ html, body {
   background: repeating-linear-gradient(135deg, var(--plum) 0 5px, var(--plum-deep) 5px 10px);
 }
 
-/* ---------- gold bottom assembly ---------- */
+/* ---------- gold bottom assembly: source-relative size, not shrunk ---------- */
 
 .tray {
   flex: 0 0 auto;
@@ -444,7 +466,7 @@ html, body {
 
 .shell.is-expanded .chevron { transform: rotate(180deg); }
 
-/* Plum continues below the tray, as measured in the source. */
+/* Plum continues below the tray, as measured. */
 .case-foot {
   flex: 1 1 auto;
   min-height: var(--below-tray);
@@ -452,16 +474,6 @@ html, body {
 }
 
 /* ---------- empty / error ---------- */
-
-.notice {
-  font-family: var(--mono);
-  font-size: 8px;
-  line-height: 1.5;
-  color: var(--ink-soft);
-}
-
-.notice strong { color: var(--ink); }
-.notice code { font-family: var(--mono); color: var(--ink); word-break: break-all; }
 
 .empty {
   padding: 8px;
@@ -472,4 +484,5 @@ html, body {
   background: var(--cream);
 }
 
+.empty strong { color: var(--ink); }
 .empty code { font-family: var(--mono); color: var(--ink); word-break: break-all; }
